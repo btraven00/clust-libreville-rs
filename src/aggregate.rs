@@ -7,7 +7,7 @@ use std::cell::RefCell;
 
 use rayon::prelude::*;
 
-use crate::graph::Graph;
+use crate::graph::{Csr, Weight};
 use crate::refine::bucket;
 
 const MIN_ROWS: usize = 64; // rows per rayon task; any value gives the same output
@@ -17,7 +17,7 @@ thread_local! {
     static SCRATCH: RefCell<(Vec<f64>, Vec<bool>, Vec<u32>)> = const { RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
 }
 
-pub(crate) fn aggregate(g: &Graph, labels: &[u32], n_labels: usize) -> Graph {
+pub(crate) fn aggregate<W: Weight>(g: &Csr<W>, labels: &[u32], n_labels: usize) -> Csr<f64> {
     let members = bucket(labels, n_labels);
     let rows: Vec<(Vec<u32>, Vec<f64>)> = members
         .par_iter()
@@ -37,7 +37,7 @@ pub(crate) fn aggregate(g: &Graph, labels: &[u32], n_labels: usize) -> Graph {
                             seen[d] = true;
                             touched.push(d as u32);
                         }
-                        wt[d] += w;
+                        wt[d] += Into::<f64>::into(w);
                     }
                 }
                 let weights = touched.iter().map(|&d| std::mem::take(&mut wt[d as usize])).collect();
@@ -57,5 +57,5 @@ pub(crate) fn aggregate(g: &Graph, labels: &[u32], n_labels: usize) -> Graph {
         weights.extend_from_slice(&w);
         offsets.push(targets.len());
     }
-    Graph::from_parts(offsets, targets, weights)
+    Csr::from_parts(offsets, targets, weights)
 }

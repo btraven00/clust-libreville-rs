@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use rayon::prelude::*;
 
-use crate::graph::Graph;
+use crate::graph::{Csr, Weight};
 use crate::rng;
 
 const MIN_LEN: usize = 64; // vertices per rayon task; any value gives the same output. 64 beat 256 by 7-10% (100k-1M, 8 threads): per-vertex work is uneven
@@ -45,7 +45,7 @@ struct Move {
 }
 
 /// Colour groups of `g` from a seeded vertex order.
-pub(crate) fn colouring(g: &Graph, seed: u64, step: u64) -> Vec<Vec<u32>> {
+pub(crate) fn colouring<W: Weight>(g: &Csr<W>, seed: u64, step: u64) -> Vec<Vec<u32>> {
     let t = std::time::Instant::now();
     let groups = colour(g, &rng::order(g.n(), seed, rng::COLOUR_ORDER, step));
     if std::env::var_os("DETLEIDEN_TRACE").is_some() {
@@ -56,7 +56,7 @@ pub(crate) fn colouring(g: &Graph, seed: u64, step: u64) -> Vec<Vec<u32>> {
 
 /// The sequential greedy pass (`colour` reproduces it exactly): each vertex in `order` takes the
 /// smallest colour no earlier-coloured neighbour has.
-fn colour_sequential(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+fn colour_sequential<W: Weight>(g: &Csr<W>, order: &[u32]) -> Vec<Vec<u32>> {
     let mut colour = vec![u32::MAX; g.n()];
     let mut used: Vec<bool> = Vec::new();
     let mut groups: Vec<Vec<u32>> = Vec::new();
@@ -106,7 +106,7 @@ fn colour_sequential(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
 ///
 /// No implementation was used as a reference; the dependency counters are atomic integers (the
 /// result does not depend on the order of the decrements).
-fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+fn colour<W: Weight>(g: &Csr<W>, order: &[u32]) -> Vec<Vec<u32>> {
     // Jones–Plassmann's rounds cost more than they save on small (dense, coarse) graphs: at 1M
     // the level-0 colouring drops 0.35 -> 0.14 s at 8 threads; at 55k it doubles.
     if g.n() < JP_MIN_N || rayon::current_num_threads() == 1 {
@@ -117,7 +117,7 @@ fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
 }
 
 /// The Jones–Plassmann colouring (see `colour` for the idea and references).
-fn colour_parallel(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+fn colour_parallel<W: Weight>(g: &Csr<W>, order: &[u32]) -> Vec<Vec<u32>> {
     let n = g.n();
     let mut rank = vec![0u32; n];
     for (i, &v) in order.iter().enumerate() {
@@ -178,7 +178,7 @@ fn colour_parallel(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
 /// resolution `gamma`. Stops when a round moves nothing, or when its modularity gain (summed in
 /// apply order) is at most `tol` (GVE-Leiden's convergence rule; 0: until nothing moves).
 /// Returns (colours, rounds) for the trace.
-pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, groups: &[Vec<u32>]) -> (usize, usize) {
+pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, tol: f64, groups: &[Vec<u32>]) -> (usize, usize) {
     let n = g.n();
     if n == 0 || g.total <= 0.0 {
         return (0, 0);
@@ -268,7 +268,7 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, grou
 /// The best community for `v` against the current state, or None to stay. Ties keep the
 /// earlier candidate in scan order (own community first, then first-touched neighbours).
 #[allow(clippy::too_many_arguments)]
-fn best_move(g: &Graph, v: u32, comm: &[u32], tot: &[f64], size: &[u32], scale: f64,
+fn best_move<W: Weight>(g: &Csr<W>, v: u32, comm: &[u32], tot: &[f64], size: &[u32], scale: f64,
              wt: &mut [f64], touched: &mut Vec<u32>) -> Option<Move> {
     let (t, w) = g.row(v as usize);
     let own = comm[v as usize];
@@ -280,7 +280,7 @@ fn best_move(g: &Graph, v: u32, comm: &[u32], tot: &[f64], size: &[u32], scale: 
         if wt[c as usize] == 0.0 {
             touched.push(c); // a zero-weight edge can push c twice: harmless, re-evaluated and cleared
         }
-        wt[c as usize] += w;
+        wt[c as usize] += Into::<f64>::into(w);
     }
     let k = g.strength[v as usize];
     let w_from = wt[own as usize];
@@ -335,7 +335,7 @@ mod tests {
                 w.extend(row.iter().map(|x| x.1));
                 off.push(t.len());
             }
-            let g = Graph::from_parts(off, t, w);
+            let g = Csr::from_parts(off, t, w);
             let order = rng::order(n, seed, rng::COLOUR_ORDER, 0);
             for threads in [1, 3, 8] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();

@@ -17,12 +17,12 @@
 
 use rayon::prelude::*;
 
-use crate::graph::Graph;
+use crate::graph::{Csr, Weight};
 use crate::rng;
 
 /// Refined labels (dense, ordered by first occurrence) and their count. Every refined cluster
 /// lies inside one community of `comm`.
-pub(crate) fn refine(g: &Graph, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {
+pub(crate) fn refine<W: Weight>(g: &Csr<W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {
     let n = g.n();
     let scale = if g.total > 0.0 { gamma / g.total } else { 0.0 };
     let members = bucket(comm, n);
@@ -52,7 +52,7 @@ pub(crate) fn refine(g: &Graph, comm: &[u32], gamma: f64, theta: f64, seed: u64,
 
 /// One community `s` (vertices in id order): the refined cluster of each member, as a position in `s`.
 #[allow(clippy::too_many_arguments)]
-fn refine_one(g: &Graph, comm: &[u32], s: &[u32], pos: &[u32], scale: f64, theta: f64, seed: u64, step: u64) -> Vec<u32> {
+fn refine_one<W: Weight>(g: &Csr<W>, comm: &[u32], s: &[u32], pos: &[u32], scale: f64, theta: f64, seed: u64, step: u64) -> Vec<u32> {
     let len = s.len();
     let c_s = comm[s[0] as usize];
     let k_s: f64 = s.iter().map(|&v| g.strength[v as usize]).sum();
@@ -64,7 +64,7 @@ fn refine_one(g: &Graph, comm: &[u32], s: &[u32], pos: &[u32], scale: f64, theta
         .iter()
         .map(|&v| {
             let (t, w) = g.row(v as usize);
-            t.iter().zip(w).filter(|&(&u, _)| u != v && comm[u as usize] == c_s).map(|(_, &w)| w).sum()
+            t.iter().zip(w).filter(|&(&u, _)| u != v && comm[u as usize] == c_s).map(|(_, &w)| Into::<f64>::into(w)).sum::<f64>()
         })
         .collect();
     let mut wt = vec![0.0f64; len];
@@ -92,7 +92,7 @@ fn refine_one(g: &Graph, comm: &[u32], s: &[u32], pos: &[u32], scale: f64, theta
                 if wt[c as usize] == 0.0 {
                     touched.push(c);
                 }
-                wt[c as usize] += w;
+                wt[c as usize] += Into::<f64>::into(w);
             }
         }
         cand.clear();
@@ -196,7 +196,7 @@ mod tests {
                 w.extend(row.iter().map(|x| x.1));
                 off.push(t.len());
             }
-            let g = Graph::from_parts(off, t, w);
+            let g = Csr::from_parts(off, t, w);
             let comm: Vec<u32> = (0..n).map(|v| (r(1_000_000 + v as u64) * k as f64) as u32).collect();
             for theta in [0.01, 0.0] {
                 let (refd, nr) = refine(&g, &comm, 1.0, theta, seed, 0);
