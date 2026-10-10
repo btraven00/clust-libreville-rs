@@ -1,5 +1,11 @@
-//! cargo run --release --features gpu-cuda --example gpu_smoke -- GRAPH.npz
+//! cargo run --release --features gpu-cuda --example gpu_smoke -- GRAPH.npz   (or gpu-metal / gpu-wgpu)
 //! Toolchain smoke test: row sums on the GPU vs the CPU; first call (includes kernel compile) and second call.
+#[cfg(not(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal")))]
+fn main() {
+    eprintln!("build with --features gpu-cuda, gpu-metal or gpu-wgpu");
+}
+
+#[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
 fn main() {
     let path = std::env::args().nth(1).expect("GRAPH.npz");
     let mut z = npyz::npz::NpzArchive::open(&path).unwrap();
