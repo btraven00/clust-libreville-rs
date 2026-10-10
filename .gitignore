@@ -5,3 +5,4 @@ target/
 ref/
 bench/out/
 bench/.cpu.lock
+__pycache__/
