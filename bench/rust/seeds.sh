@@ -3,7 +3,7 @@
 # i.e. the reference's seeds 100..119). Per-seed comparison of stock 1t/8t/16t finds thread-count flips; all feed ARI_ref.
 set -e
 cd "$(dirname "$0")"
-g=../graphs/hao2021_$1.npz; out=../out/leiden-rs/hao2021_$1; B=target/release/ldbench
+g=../graphs/hao2021_$1.npz; out=../out/leiden-rs/hao2021_$1; B="flock $HOME/phd/detleiden/bench/.cpu.lock target/release/ldbench"  # untimed, but locked so it never overlaps a timed run
 for k in $(seq 1 20); do
     for vt in stock:1 stock:8 stock:16 seqagg:8 sc:1; do
         v=${vt%:*}; t=${vt#*:}; d=$out/$v-seeds/${t}t; mkdir -p $d; [ -f $d/run$k.json ] && continue
