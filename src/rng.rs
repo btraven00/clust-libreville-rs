@@ -1,6 +1,8 @@
 //! Counter-based randomness: every draw is a pure function of (seed, stream, step, vertex), so
 //! reordering or parallelising work never changes what anyone draws.
 
+use rayon::prelude::*;
+
 pub(crate) const COLOUR_ORDER: u64 = 1;
 pub(crate) const REFINE_ORDER: u64 = 2;
 pub(crate) const REFINE_DRAW: u64 = 3;
@@ -38,6 +40,6 @@ pub(crate) fn exp_neg(x: f64) -> f64 {
 /// The vertices 0..n in a seeded order.
 pub(crate) fn order(n: usize, seed: u64, stream: u64, step: u64) -> Vec<u32> {
     let mut o: Vec<(u64, u32)> = (0..n as u32).map(|v| (key(seed, stream, step, v as u64), v)).collect();
-    o.sort_unstable();
+    o.par_sort_unstable(); // (key, v) pairs are distinct, so the result is the same as a sequential sort
     o.into_iter().map(|(_, v)| v).collect()
 }

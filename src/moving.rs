@@ -1,7 +1,8 @@
 //! Local moving, deterministic by construction.
 //!
-//! Vertices are coloured so that each colour is an independent set (greedy first-fit over a
-//! seeded order; adapted from leiden-rs 0.8.1, `parallel.rs::greedy_coloring`, MIT). Colour by
+//! Vertices are coloured so that each colour is an independent set: greedy first-fit over a
+//! seeded order (the colour-group scheme follows leiden-rs 0.8.1, `parallel.rs::greedy_coloring`
+//! and `local_moving_parallel`, MIT), computed in parallel by Jones–Plassmann (see `colour`). Colour by
 //! colour, every vertex's best move is *decided* against the state frozen before its group (no
 //! neighbour of it moves inside the group, so its edge weights to communities are exact), then
 //! moves are *applied* in group order with a gain re-check against the updated community totals.
@@ -15,7 +16,7 @@
 //! all write `true`, so the result doesn't depend on their order.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use rayon::prelude::*;
 
@@ -23,11 +24,14 @@ use crate::graph::Graph;
 use crate::rng;
 
 const MIN_LEN: usize = 256; // vertices per rayon task; any value gives the same output
+const JP_MIN_N: usize = 100_000; // below this, colour sequentially; either way gives the same colouring
 
 thread_local! {
     // per-thread scratch, kept across calls (GVE's per-thread hashtables): weight from the
     // current vertex to each community, and the communities touched. All zero between uses.
     static SCRATCH: RefCell<(Vec<f64>, Vec<u32>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+    // colours used by a vertex's earlier neighbours; all false between uses
+    static USED: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
 const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
@@ -50,7 +54,9 @@ pub(crate) fn colouring(g: &Graph, seed: u64, step: u64) -> Vec<Vec<u32>> {
     groups
 }
 
-fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+/// The sequential greedy pass (`colour` reproduces it exactly): each vertex in `order` takes the
+/// smallest colour no earlier-coloured neighbour has.
+fn colour_sequential(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
     let mut colour = vec![u32::MAX; g.n()];
     let mut used: Vec<bool> = Vec::new();
     let mut groups: Vec<Vec<u32>> = Vec::new();
@@ -75,6 +81,93 @@ fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
         colour[v as usize] = c as u32;
         if groups.len() <= c {
             groups.push(Vec::new());
+        }
+        groups[c].push(v);
+    }
+    groups
+}
+
+/// Greedy first-fit colouring in `order`: in parallel (Jones–Plassmann) on large graphs, sequentially
+/// otherwise; the colouring is identical either way.
+///
+/// Jones–Plassmann: a vertex is coloured once all its neighbours that come earlier in `order`
+/// are, taking the smallest colour none of them has. Each vertex then sees exactly what the
+/// sequential greedy pass would show it (its earlier neighbours, already coloured), so the
+/// colouring is the same, and grouping in `order` gives the same groups in the same order. The
+/// vertices coloured in one round are independent (of two adjacent ones, the later waits for the
+/// earlier), so a round runs in parallel. Rounds are bounded by the longest chain of increasing
+/// priority, which is short for random priorities.
+///
+/// - M. T. Jones and P. E. Plassmann, "A parallel graph coloring heuristic", SIAM J. Sci. Comput.
+///   14(3):654–669, 1993, doi:10.1137/0914041 (the algorithm; random priorities).
+/// - W. Hasenplaugh, T. Kaler, T. B. Schardl and C. E. Leiserson, "Ordering heuristics for parallel
+///   graph coloring", SPAA 2014, doi:10.1145/2612669.2612697 (JP with a priority order computes the
+///   serial greedy colouring of that order; the dependency-counter, frontier-based formulation).
+///
+/// No implementation was used as a reference; the dependency counters are atomic integers (the
+/// result does not depend on the order of the decrements).
+fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+    // Jones–Plassmann's rounds cost more than they save on small (dense, coarse) graphs: at 1M
+    // the level-0 colouring drops 0.35 -> 0.14 s at 8 threads; at 55k it doubles.
+    if g.n() < JP_MIN_N || rayon::current_num_threads() == 1 {
+        colour_sequential(g, order)
+    } else {
+        colour_parallel(g, order)
+    }
+}
+
+/// The Jones–Plassmann colouring (see `colour` for the idea and references).
+fn colour_parallel(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+    let n = g.n();
+    let mut rank = vec![0u32; n];
+    for (i, &v) in order.iter().enumerate() {
+        rank[v as usize] = i as u32;
+    }
+    let earlier = |v: u32, u: u32| u != v && rank[u as usize] < rank[v as usize];
+    // waiting[v]: earlier neighbours not yet coloured
+    let waiting: Vec<AtomicU32> = (0..n as u32)
+        .into_par_iter()
+        .map(|v| AtomicU32::new(g.row(v as usize).0.iter().filter(|&&u| earlier(v, u)).count() as u32))
+        .collect();
+    let waiting = &waiting;
+    let colour: Vec<AtomicU32> = (0..n).map(|_| AtomicU32::new(u32::MAX)).collect();
+    let mut frontier: Vec<u32> = (0..n as u32).into_par_iter().filter(|&v| waiting[v as usize].load(Relaxed) == 0).collect();
+    while !frontier.is_empty() {
+        frontier.par_iter().with_min_len(MIN_LEN).for_each(|&v| {
+            USED.with(|used| {
+                let used = &mut *used.borrow_mut();
+                let t = g.row(v as usize).0;
+                for &u in t {
+                    if earlier(v, u) {
+                        let c = colour[u as usize].load(Relaxed) as usize;
+                        if used.len() <= c {
+                            used.resize(c + 1, false);
+                        }
+                        used[c] = true;
+                    }
+                }
+                let c = used.iter().position(|&x| !x).unwrap_or(used.len());
+                for &u in t {
+                    if earlier(v, u) {
+                        used[colour[u as usize].load(Relaxed) as usize] = false;
+                    }
+                }
+                colour[v as usize].store(c as u32, Relaxed);
+            })
+        });
+        frontier = frontier
+            .par_iter()
+            .with_min_len(MIN_LEN)
+            .flat_map_iter(|&v| {
+                g.row(v as usize).0.iter().copied().filter(move |&u| earlier(u, v) && waiting[u as usize].fetch_sub(1, Relaxed) == 1)
+            })
+            .collect();
+    }
+    let mut groups: Vec<Vec<u32>> = Vec::new();
+    for &v in order {
+        let c = colour[v as usize].load(Relaxed) as usize;
+        if groups.len() <= c {
+            groups.resize(c + 1, Vec::new());
         }
         groups[c].push(v);
     }
@@ -210,4 +303,44 @@ fn best_move(g: &Graph, v: u32, comm: &[u32], tot: &[f64], size: &[u32], scale: 
     }
     touched.clear();
     (best.0 != own).then_some(Move { v, to: best.0, w_to, w_from })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    #[test]
+    fn parallel_colouring_equals_sequential_greedy() {
+        for seed in 0..60u64 {
+            let r = |i: u64| rng::unit(rng::key(seed, 77, i, 0));
+            let n = 50 + (r(0) * 900.0) as usize;
+            let p = 2.0 + r(1) * 30.0; // mean degree
+            let mut rows: Vec<Vec<(u32, f64)>> = vec![vec![]; n];
+            for u in 0..n {
+                for v in u + 1..n {
+                    if r(10 + (u * n + v) as u64) < p / n as f64 {
+                        rows[u].push((v as u32, 1.0));
+                        rows[v].push((u as u32, 1.0));
+                    }
+                }
+                if r(3 + u as u64) < 0.05 {
+                    rows[u].push((u as u32, 1.0)); // self-loops, as on coarse graphs
+                }
+            }
+            let mut off = vec![0];
+            let (mut t, mut w) = (vec![], vec![]);
+            for row in &rows {
+                t.extend(row.iter().map(|x| x.0));
+                w.extend(row.iter().map(|x| x.1));
+                off.push(t.len());
+            }
+            let g = Graph::from_parts(off, t, w);
+            let order = rng::order(n, seed, rng::COLOUR_ORDER, 0);
+            for threads in [1, 3, 8] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                assert_eq!(pool.install(|| colour_parallel(&g, &order)), colour_sequential(&g, &order), "seed {seed}, {threads} threads");
+            }
+        }
+    }
 }
