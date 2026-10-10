@@ -63,6 +63,25 @@ pub fn leiden_traced(g: &Graph, o: &Options) -> (Vec<u32>, Vec<u64>) {
     (l, h)
 }
 
+/// `leiden` with level-0 local moving on the GPU (cubecl; the build's runtime). On CUDA (f64)
+/// the labels equal the CPU's; on f32-only devices they may differ but stay deterministic.
+#[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
+pub fn leiden_gpu(g: &Graph, o: &Options) -> Vec<u32> {
+    let gpu = gpu::Gpu::new();
+    with_pool(o, || match &g.0 {
+        Repr::F32(c) => iterate(&gpu, c, o, None),
+        Repr::F64(c) => iterate(&gpu, c, o, None),
+    })
+}
+
+fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
+    let threads = o.threads.unwrap_or_else(|| {
+        std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+    });
+    rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("thread pool").install(f)
+}
+
 fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
     let threads = o.threads.unwrap_or_else(|| {
         std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)

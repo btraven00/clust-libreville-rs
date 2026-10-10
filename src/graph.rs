@@ -9,9 +9,20 @@
 //! are), else f64; coarse graphs are always f64. All arithmetic is f64: f32 -> f64 is exact, so
 //! the storage type changes memory traffic (8 instead of 12 bytes per edge), never a result.
 
-pub(crate) trait Weight: Copy + Send + Sync + Into<f64> + 'static {}
-impl Weight for f32 {}
-impl Weight for f64 {}
+pub(crate) trait Weight: Copy + Send + Sync + Into<f64> + 'static {
+    /// The weights as f32, when that is their storage type (for GPU upload).
+    fn as_f32(w: &[Self]) -> Option<&[f32]>;
+}
+impl Weight for f32 {
+    fn as_f32(w: &[f32]) -> Option<&[f32]> {
+        Some(w)
+    }
+}
+impl Weight for f64 {
+    fn as_f32(_: &[f64]) -> Option<&[f32]> {
+        None
+    }
+}
 
 #[derive(Clone)] // for Cow; never cloned in practice (the CPU backend borrows level 0)
 pub(crate) struct Csr<W> {
