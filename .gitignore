@@ -2,3 +2,4 @@ bench/graphs/
 target/
 *.npz
 *.npy
+ref/
