@@ -23,7 +23,7 @@ use rayon::prelude::*;
 use crate::graph::Graph;
 use crate::rng;
 
-const MIN_LEN: usize = 256; // vertices per rayon task; any value gives the same output
+const MIN_LEN: usize = 64; // vertices per rayon task; any value gives the same output. 64 beat 256 by 7-10% (100k-1M, 8 threads): per-vertex work is uneven
 const JP_MIN_N: usize = 100_000; // below this, colour sequentially; either way gives the same colouring
 
 thread_local! {

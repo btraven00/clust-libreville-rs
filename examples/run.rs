@@ -1,4 +1,4 @@
-//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--out LABELS.npy]
+//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--repeat R] [--out LABELS.npy]
 //! GRAPH.npz: full symmetric CSR (indptr, indices, data), as bench/py/export_graph.py writes it.
 //! Prints one line: n, time, clusters, modularity. LABELS.npy: int64, graph row order.
 
@@ -27,9 +27,14 @@ fn main() {
     let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
     let g = Graph::from_csr(&indptr, &indices, &data).expect("valid graph");
 
-    let t = Instant::now();
-    let labels = leiden(&g, &o);
-    let secs = t.elapsed().as_secs_f64();
+    // --repeat R: R calls in this process, report the fastest (as GVE's harness does: best of 3 in one process)
+    let repeat: usize = flag("--repeat").map_or(1, |s| s.parse().unwrap());
+    let (mut labels, mut secs) = (Vec::new(), f64::INFINITY);
+    for _ in 0..repeat {
+        let t = Instant::now();
+        labels = leiden(&g, &o);
+        secs = secs.min(t.elapsed().as_secs_f64());
+    }
     let k = labels.iter().max().map_or(0, |&m| m + 1);
     println!("n {} time_s {secs:.3} k {k} Q {:.6} seed {} theta {} niter {} threads {:?} tol {} min_gain {}", g.n(), modularity(&g, &labels, o.resolution), o.seed, o.theta, o.n_iterations, o.threads, o.tolerance, o.min_gain);
 
