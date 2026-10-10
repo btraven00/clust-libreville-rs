@@ -30,9 +30,6 @@ pub struct Options {
     /// With `n_iterations < 0`: also stop when an iteration gains less than this modularity.
     /// 0 (default): strictly until an iteration changes nothing (comparable to igraph/leidenalg).
     pub min_gain: f64,
-    /// Colour the input graph once per run instead of once per iteration (faster iterations;
-    /// different, still deterministic, trajectories).
-    pub reuse_colouring: bool,
     /// Worker threads; None: `RAYON_NUM_THREADS`, else `std::thread::available_parallelism()`
     /// (which respects cgroup quotas). The labels do not depend on it.
     pub threads: Option<usize>,
@@ -40,7 +37,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, min_gain: 0.0, reuse_colouring: false, threads: None }
+        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, min_gain: 0.0, threads: None }
     }
 }
 
@@ -73,12 +70,11 @@ fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
 fn iterate(g: &Graph, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
     let mut labels: Vec<u32> = (0..g.n() as u32).collect();
     let cap = if o.n_iterations < 0 { MAX_ITERATIONS } else { o.n_iterations };
-    let colours0 = o.reuse_colouring.then(|| moving::colouring(g, o.seed, 0));
     let watch_gain = o.n_iterations < 0 && o.min_gain > 0.0;
     let mut q = f64::NEG_INFINITY;
     for it in 0..cap {
         let t = std::time::Instant::now();
-        let next = canonical(&iteration(g, &labels, o, it as u64, colours0.as_deref(), hashes.as_deref_mut()));
+        let next = canonical(&iteration(g, &labels, o, it as u64, hashes.as_deref_mut()));
         let mut done = next == labels;
         if watch_gain || std::env::var_os("DETLEIDEN_TRACE").is_some() {
             let q_next = modularity(g, &next, o.resolution);
@@ -99,8 +95,7 @@ fn iterate(g: &Graph, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32
 }
 
 /// One Leiden iteration from `start`: move, refine, aggregate, until no level aggregates.
-fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64, colours0: Option<&[Vec<u32>]>,
-             mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
     let trace = std::env::var_os("DETLEIDEN_TRACE").is_some();
     let mut node_of: Vec<u32> = (0..g.n() as u32).collect(); // coarse node of each vertex
     let mut comm = start.to_vec();
@@ -113,15 +108,8 @@ fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64, colours0: Option<&[
         }
         let t0 = std::time::Instant::now();
         let tol = o.tolerance / 10f64.powi(level as i32);
-        let fresh;
-        let groups = match colours0 {
-            Some(c) if level == 0 => c,
-            _ => {
-                fresh = moving::colouring(cur, o.seed, step);
-                &fresh
-            }
-        };
-        let (colours, rounds) = moving::move_nodes(cur, &mut comm, o.resolution, tol, groups);
+        let groups = moving::colouring(cur, o.seed, step);
+        let (colours, rounds) = moving::move_nodes(cur, &mut comm, o.resolution, tol, &groups);
         let (dcomm, n_comm) = refine::dense(&comm);
         let t1 = std::time::Instant::now();
         if trace {

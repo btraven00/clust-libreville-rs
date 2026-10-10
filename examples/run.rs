@@ -1,4 +1,4 @@
-//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--reuse-colouring] [--out LABELS.npy]
+//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--out LABELS.npy]
 //! GRAPH.npz: full symmetric CSR (indptr, indices, data), as bench/py/export_graph.py writes it.
 //! Prints one line: n, time, clusters, modularity. LABELS.npy: int64, graph row order.
 
@@ -15,7 +15,6 @@ fn main() {
     if let Some(s) = flag("--threads") { o.threads = Some(s.parse().unwrap()); }
     if let Some(s) = flag("--tol") { o.tolerance = s.parse().unwrap(); }
     if let Some(s) = flag("--min-gain") { o.min_gain = s.parse().unwrap(); }
-    o.reuse_colouring = args.iter().any(|a| a == "--reuse-colouring");
 
     let mut z = npyz::npz::NpzArchive::open(&args[0]).expect("open npz");
     let mut ints = |name: &str| -> Vec<i64> {
@@ -32,7 +31,7 @@ fn main() {
     let labels = leiden(&g, &o);
     let secs = t.elapsed().as_secs_f64();
     let k = labels.iter().max().map_or(0, |&m| m + 1);
-    println!("n {} time_s {secs:.3} k {k} Q {:.6} seed {} theta {} niter {} threads {:?} tol {} min_gain {} reuse_colouring {}", g.n(), modularity(&g, &labels, o.resolution), o.seed, o.theta, o.n_iterations, o.threads, o.tolerance, o.min_gain, o.reuse_colouring);
+    println!("n {} time_s {secs:.3} k {k} Q {:.6} seed {} theta {} niter {} threads {:?} tol {} min_gain {}", g.n(), modularity(&g, &labels, o.resolution), o.seed, o.theta, o.n_iterations, o.threads, o.tolerance, o.min_gain);
 
     if let Some(path) = flag("--out") {
         let v: Vec<i64> = labels.iter().map(|&x| x as i64).collect();
