@@ -5,13 +5,30 @@
 //! colour, every vertex's best move is *decided* against the state frozen before its group (no
 //! neighbour of it moves inside the group, so its edge weights to communities are exact), then
 //! moves are *applied* in group order with a gain re-check against the updated community totals.
-//! The decide step is the part phase 2 runs in parallel; the apply step stays sequential.
+//! The decide step runs in parallel (order-preserving collect); the apply step is sequential,
+//! O(moves); marking the moved vertices' neighbours runs in parallel after it.
 //!
-//! Pruning as in GVE-Leiden: only vertices whose neighbourhood changed are re-examined. The
-//! flags are set in the apply step, so the work set of every group is deterministic.
+//! Pruning as in GVE-Leiden: only vertices whose neighbourhood changed are re-examined. A flag
+//! is set for each neighbour of a moved vertex that is now in another community. Neighbours of a
+//! group never move inside the group, so marking after the whole group equals marking during
+//! its apply, and the work set of every group is deterministic. The flag writes race, but they
+//! all write `true`, so the result doesn't depend on their order.
+
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+
+use rayon::prelude::*;
 
 use crate::graph::Graph;
 use crate::rng;
+
+const MIN_LEN: usize = 256; // vertices per rayon task; any value gives the same output
+
+thread_local! {
+    // per-thread scratch, kept across calls (GVE's per-thread hashtables): weight from the
+    // current vertex to each community, and the communities touched. All zero between uses.
+    static SCRATCH: RefCell<(Vec<f64>, Vec<u32>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+}
 
 const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
 const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
@@ -71,28 +88,34 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, seed: u64, ste
     let mut empty: Vec<u32> = (0..n as u32).rev().filter(|&c| size[c as usize] == 0).collect();
     let groups = colour(g, &rng::order(n, seed, rng::COLOUR_ORDER, step));
 
-    let mut affected = vec![true; n];
-    let mut wt = vec![0.0f64; n]; // scratch: weight from v to each community
-    let mut touched: Vec<u32> = Vec::new();
-    let mut moves: Vec<Move> = Vec::new();
+    let affected: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(true)).collect();
+    let mut moved: Vec<u32> = Vec::new();
     let mut rounds = 0;
 
     for _ in 0..MAX_ROUNDS {
         rounds += 1;
         let mut round_moves = 0usize;
         for group in &groups {
-            // decide, against the frozen state
-            moves.clear();
-            for &v in group {
-                if !affected[v as usize] {
-                    continue;
-                }
-                affected[v as usize] = false;
-                if let Some(m) = best_move(g, v, comm, &tot, &size, scale, &mut wt, &mut touched) {
-                    moves.push(m);
-                }
-            }
+            // decide, in parallel, against the frozen state
+            let frozen: &[u32] = comm;
+            let moves: Vec<Move> = group
+                .par_iter()
+                .with_min_len(MIN_LEN)
+                .filter_map(|&v| {
+                    if !affected[v as usize].swap(false, Relaxed) {
+                        return None;
+                    }
+                    SCRATCH.with(|s| {
+                        let (wt, touched) = &mut *s.borrow_mut();
+                        if wt.len() < n {
+                            wt.resize(n, 0.0);
+                        }
+                        best_move(g, v, frozen, &tot, &size, scale, wt, touched)
+                    })
+                })
+                .collect();
             // apply, in order, re-checking the gain against the totals as they are now
+            moved.clear();
             for m in &moves {
                 let (v, k) = (m.v as usize, g.strength[m.v as usize]);
                 let from = comm[v] as usize;
@@ -119,14 +142,19 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, seed: u64, ste
                 tot[to] += k;
                 size[to] += 1;
                 comm[v] = to as u32;
-                let (t, _) = g.row(v);
-                for &u in t {
-                    if comm[u as usize] as usize != to {
-                        affected[u as usize] = true;
+                moved.push(v as u32);
+            }
+            round_moves += moved.len();
+            // mark, in parallel, the neighbours now in another community
+            let comm: &[u32] = comm;
+            moved.par_iter().with_min_len(MIN_LEN).for_each(|&v| {
+                let c = comm[v as usize];
+                for &u in g.row(v as usize).0 {
+                    if comm[u as usize] != c {
+                        affected[u as usize].store(true, Relaxed);
                     }
                 }
-                round_moves += 1;
-            }
+            });
         }
         if round_moves == 0 {
             break;

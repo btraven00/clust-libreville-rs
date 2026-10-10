@@ -7,6 +7,7 @@ description = "Seeded, deterministic Leiden community detection: the same labels
 publish = false
 
 [dependencies]
+rayon = "1"
 
 [dev-dependencies]
 npyz = { version = "0.8", features = ["npz"] }

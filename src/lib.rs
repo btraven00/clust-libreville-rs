@@ -23,11 +23,14 @@ pub struct Options {
     pub n_iterations: i64,
     /// Refinement randomness (igraph's `beta`), in edge-weight units; 0: greedy (GVE).
     pub theta: f64,
+    /// Worker threads; None: `RAYON_NUM_THREADS`, else `std::thread::available_parallelism()`
+    /// (which respects cgroup quotas). The labels do not depend on it.
+    pub threads: Option<usize>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01 }
+        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, threads: None }
     }
 }
 
@@ -36,10 +39,32 @@ const MAX_LEVELS: u64 = 1000;
 
 /// Community labels 0.., ordered by community size (largest first), then by smallest member.
 pub fn leiden(g: &Graph, o: &Options) -> Vec<u32> {
+    run(g, o, None)
+}
+
+/// `leiden`, plus the hash of every level's graph (structure and exact weight bits), in order:
+/// for checking that nothing, not even a last bit, depends on the thread count.
+#[doc(hidden)]
+pub fn leiden_traced(g: &Graph, o: &Options) -> (Vec<u32>, Vec<u64>) {
+    let mut h = Vec::new();
+    let l = run(g, o, Some(&mut h));
+    (l, h)
+}
+
+fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+    let threads = o.threads.unwrap_or_else(|| {
+        std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+    });
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("thread pool");
+    pool.install(|| iterate(g, o, hashes))
+}
+
+fn iterate(g: &Graph, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
     let mut labels: Vec<u32> = (0..g.n() as u32).collect();
     let cap = if o.n_iterations < 0 { MAX_ITERATIONS } else { o.n_iterations };
     for it in 0..cap {
-        let next = canonical(&iteration(g, &labels, o, it as u64));
+        let next = canonical(&iteration(g, &labels, o, it as u64, hashes.as_deref_mut()));
         let done = next == labels;
         labels = next;
         if done && o.n_iterations < 0 {
@@ -51,7 +76,7 @@ pub fn leiden(g: &Graph, o: &Options) -> Vec<u32> {
 }
 
 /// One Leiden iteration from `start`: move, refine, aggregate, until no level aggregates.
-fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64) -> Vec<u32> {
+fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
     let trace = std::env::var_os("DETLEIDEN_TRACE").is_some();
     let mut node_of: Vec<u32> = (0..g.n() as u32).collect(); // coarse node of each vertex
     let mut comm = start.to_vec();
@@ -59,6 +84,9 @@ fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64) -> Vec<u32> {
     for level in 0..MAX_LEVELS {
         let cur = coarse.as_ref().unwrap_or(g);
         let step = it << 32 | level;
+        if let Some(h) = hashes.as_deref_mut() {
+            h.push(cur.hash());
+        }
         let t0 = std::time::Instant::now();
         let (colours, rounds) = moving::move_nodes(cur, &mut comm, o.resolution, o.seed, step);
         let (dcomm, n_comm) = refine::dense(&comm);
