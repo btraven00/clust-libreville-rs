@@ -1,0 +1,15 @@
+[package]
+name = "detleiden"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Seeded, deterministic Leiden community detection: the same labels for the same seed at any thread count"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+npyz = { version = "0.8", features = ["npz"] }
+
+[profile.release]
+debug = 1

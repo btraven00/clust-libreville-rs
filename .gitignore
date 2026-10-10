@@ -3,3 +3,5 @@ target/
 *.npz
 *.npy
 ref/
+bench/out/
+bench/.cpu.lock
