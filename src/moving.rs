@@ -40,7 +40,17 @@ struct Move {
     w_from: f64,
 }
 
-pub(crate) fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
+/// Colour groups of `g` from a seeded vertex order.
+pub(crate) fn colouring(g: &Graph, seed: u64, step: u64) -> Vec<Vec<u32>> {
+    let t = std::time::Instant::now();
+    let groups = colour(g, &rng::order(g.n(), seed, rng::COLOUR_ORDER, step));
+    if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+        eprintln!("    colouring n {}: {:.4} s", g.n(), t.elapsed().as_secs_f64());
+    }
+    groups
+}
+
+fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
     let mut colour = vec![u32::MAX; g.n()];
     let mut used: Vec<bool> = Vec::new();
     let mut groups: Vec<Vec<u32>> = Vec::new();
@@ -75,7 +85,7 @@ pub(crate) fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
 /// resolution `gamma`. Stops when a round moves nothing, or when its modularity gain (summed in
 /// apply order) is at most `tol` (GVE-Leiden's convergence rule; 0: until nothing moves).
 /// Returns (colours, rounds) for the trace.
-pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, seed: u64, step: u64) -> (usize, usize) {
+pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, groups: &[Vec<u32>]) -> (usize, usize) {
     let n = g.n();
     if n == 0 || g.total <= 0.0 {
         return (0, 0);
@@ -88,13 +98,7 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, seed
         size[comm[v] as usize] += 1;
     }
     let mut empty: Vec<u32> = (0..n as u32).rev().filter(|&c| size[c as usize] == 0).collect();
-    let t_setup = std::time::Instant::now();
-    let order = rng::order(n, seed, rng::COLOUR_ORDER, step);
-    let t_order = t_setup.elapsed().as_secs_f64();
-    let groups = colour(g, &order);
-    if std::env::var_os("DETLEIDEN_TRACE").is_some() {
-        eprintln!("    setup n {n}: order {t_order:.4} colour {:.4}", t_setup.elapsed().as_secs_f64() - t_order);
-    }
+
 
     let affected: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(true)).collect();
     let mut moved: Vec<u32> = Vec::new();
@@ -104,7 +108,7 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, seed
         rounds += 1;
         let mut round_moves = 0usize;
         let mut round_gain = 0.0f64; // weight units; modularity gain = 2 * round_gain / 2m
-        for group in &groups {
+        for group in groups {
             // decide, in parallel, against the frozen state
             let frozen: &[u32] = comm;
             let moves: Vec<Move> = group
