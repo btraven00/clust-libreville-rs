@@ -7,6 +7,8 @@
 
 mod aggregate;
 mod backend;
+#[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
+pub mod gpu;
 mod graph;
 mod moving;
 mod refine;

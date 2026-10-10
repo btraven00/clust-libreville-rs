@@ -8,10 +8,21 @@ publish = false
 
 [dependencies]
 rayon = "1"
+cubecl = { version = "0.11", optional = true }
+
+[features]
+# GPU backends (cubecl); none by default. One runtime per build.
+gpu-cuda = ["dep:cubecl", "cubecl/cuda"]
+gpu-wgpu = ["dep:cubecl", "cubecl/wgpu"]
+gpu-metal = ["dep:cubecl", "cubecl/metal-native"]
 
 [dev-dependencies]
 npyz = { version = "0.8", features = ["npz"] }
 criterion = { version = "0.5", default-features = false }
+
+[[example]]
+name = "gpu_smoke"
+required-features = ["gpu-cuda"]
 
 [[bench]]
 name = "leiden"
