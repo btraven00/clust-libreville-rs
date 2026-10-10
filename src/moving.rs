@@ -35,13 +35,13 @@ thread_local! {
 }
 
 const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
-const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
+pub(crate) const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
 
-struct Move {
-    v: u32,
-    to: u32,
-    w_to: f64,
-    w_from: f64,
+pub(crate) struct Move {
+    pub(crate) v: u32,
+    pub(crate) to: u32,
+    pub(crate) w_to: f64,
+    pub(crate) w_from: f64,
 }
 
 /// Colour groups of `g` from a seeded vertex order.
@@ -268,7 +268,7 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
 /// The best community for `v` against the current state, or None to stay. Ties keep the
 /// earlier candidate in scan order (own community first, then first-touched neighbours).
 #[allow(clippy::too_many_arguments)]
-fn best_move<W: Weight>(g: &Csr<W>, v: u32, comm: &[u32], tot: &[f64], size: &[u32], scale: f64,
+pub(crate) fn best_move<W: Weight>(g: &Csr<W>, v: u32, comm: &[u32], tot: &[f64], size: &[u32], scale: f64,
              wt: &mut [f64], touched: &mut Vec<u32>) -> Option<Move> {
     let (t, w) = g.row(v as usize);
     let own = comm[v as usize];
