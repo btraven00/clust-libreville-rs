@@ -34,8 +34,11 @@ pub(crate) fn refine(g: &Graph, comm: &[u32], gamma: f64, theta: f64, seed: u64,
     }
     let mut big: Vec<&Vec<u32>> = members.iter().filter(|s| s.len() > 1).collect();
     big.sort_by_key(|s| std::cmp::Reverse(s.len())); // stable: ties keep community order
+    // one task per community: rayon pre-splits a slice into ~one chunk per thread, and the chunk
+    // holding the largest communities would otherwise run them all on one thread
     let results: Vec<Vec<u32>> = big
         .par_iter()
+        .with_max_len(1)
         .map(|s| refine_one(g, comm, s, &pos, scale, theta, seed, step))
         .collect();
     let mut refined: Vec<u32> = (0..n as u32).collect();

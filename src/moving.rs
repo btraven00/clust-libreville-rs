@@ -72,8 +72,10 @@ pub(crate) fn colour(g: &Graph, order: &[u32]) -> Vec<Vec<u32>> {
 }
 
 /// Moves vertices of `g` between communities `comm` (ids < n) to increase modularity with
-/// resolution `gamma`. Returns (colours, rounds) for the trace.
-pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, seed: u64, step: u64) -> (usize, usize) {
+/// resolution `gamma`. Stops when a round moves nothing, or when its modularity gain (summed in
+/// apply order) is at most `tol` (GVE-Leiden's convergence rule; 0: until nothing moves).
+/// Returns (colours, rounds) for the trace.
+pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, seed: u64, step: u64) -> (usize, usize) {
     let n = g.n();
     if n == 0 || g.total <= 0.0 {
         return (0, 0);
@@ -95,6 +97,7 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, seed: u64, ste
     for _ in 0..MAX_ROUNDS {
         rounds += 1;
         let mut round_moves = 0usize;
+        let mut round_gain = 0.0f64; // weight units; modularity gain = 2 * round_gain / 2m
         for group in &groups {
             // decide, in parallel, against the frozen state
             let frozen: &[u32] = comm;
@@ -120,18 +123,14 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, seed: u64, ste
                 let (v, k) = (m.v as usize, g.strength[m.v as usize]);
                 let from = comm[v] as usize;
                 let stay = m.w_from - scale * k * (tot[from] - k);
+                let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * tot[m.to as usize] };
+                if go <= stay || (m.to == NEW && size[from] == 1) {
+                    continue; // no longer an improvement, or already alone
+                }
+                round_gain += go - stay;
                 let to = if m.to == NEW {
-                    if size[from] == 1 {
-                        continue; // already alone
-                    }
-                    if 0.0 <= stay {
-                        continue;
-                    }
                     empty.pop().expect("an empty community exists while one has 2+ members")
                 } else {
-                    if m.w_to - scale * k * tot[m.to as usize] <= stay {
-                        continue;
-                    }
                     m.to
                 } as usize;
                 tot[from] -= k;
@@ -156,7 +155,7 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, seed: u64, ste
                 }
             });
         }
-        if round_moves == 0 {
+        if round_moves == 0 || 2.0 * round_gain / g.total <= tol {
             break;
         }
     }

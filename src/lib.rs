@@ -23,6 +23,10 @@ pub struct Options {
     pub n_iterations: i64,
     /// Refinement randomness (igraph's `beta`), in edge-weight units; 0: greedy (GVE).
     pub theta: f64,
+    /// Local moving stops when a round gains at most this much modularity; the tolerance is
+    /// divided by 10 at each level (GVE-Leiden's rule, which starts at 1e-2). 0: move until
+    /// nothing moves.
+    pub tolerance: f64,
     /// Worker threads; None: `RAYON_NUM_THREADS`, else `std::thread::available_parallelism()`
     /// (which respects cgroup quotas). The labels do not depend on it.
     pub threads: Option<usize>,
@@ -30,7 +34,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, threads: None }
+        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, threads: None }
     }
 }
 
@@ -88,7 +92,8 @@ fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64, mut hashes: Option<
             h.push(cur.hash());
         }
         let t0 = std::time::Instant::now();
-        let (colours, rounds) = moving::move_nodes(cur, &mut comm, o.resolution, o.seed, step);
+        let tol = o.tolerance / 10f64.powi(level as i32);
+        let (colours, rounds) = moving::move_nodes(cur, &mut comm, o.resolution, tol, o.seed, step);
         let (dcomm, n_comm) = refine::dense(&comm);
         let t1 = std::time::Instant::now();
         if trace {
