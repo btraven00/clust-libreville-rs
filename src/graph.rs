@@ -11,6 +11,7 @@
 
 pub(crate) trait Weight: Copy + Send + Sync + Into<f64> + 'static {
     /// The weights as f32, when that is their storage type (for GPU upload).
+    #[cfg_attr(not(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal")), allow(dead_code))]
     fn as_f32(w: &[Self]) -> Option<&[f32]>;
 }
 impl Weight for f32 {

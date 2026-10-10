@@ -83,15 +83,10 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
 }
 
 fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
-    let threads = o.threads.unwrap_or_else(|| {
-        std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
-            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
-    });
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("thread pool");
-    match &g.0 {
-        Repr::F32(c) => pool.install(|| iterate(&Cpu, c, o, hashes)),
-        Repr::F64(c) => pool.install(|| iterate(&Cpu, c, o, hashes)),
-    }
+    with_pool(o, || match &g.0 {
+        Repr::F32(c) => iterate(&Cpu, c, o, hashes),
+        Repr::F64(c) => iterate(&Cpu, c, o, hashes),
+    })
 }
 
 fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
