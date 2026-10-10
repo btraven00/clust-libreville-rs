@@ -111,11 +111,12 @@ fn iteration(g: &Graph, start: &[u32], o: &Options, it: u64, mut hashes: Option<
         let groups = moving::colouring(cur, o.seed, step);
         let (colours, rounds) = moving::move_nodes(cur, &mut comm, o.resolution, tol, &groups);
         let (dcomm, n_comm) = refine::dense(&comm);
-        let t1 = std::time::Instant::now();
+        let move_s = t0.elapsed().as_secs_f64();
         if trace {
-            eprintln!("it {it} level {level} n {} m {} hash {:016x} colours {colours} rounds {rounds} communities {n_comm} move_s {:.4}",
-                      cur.n(), cur.targets.len(), cur.hash(), (t1 - t0).as_secs_f64());
+            eprintln!("it {it} level {level} n {} m {} hash {:016x} colours {colours} rounds {rounds} communities {n_comm} move_s {move_s:.4}",
+                      cur.n(), cur.targets.len(), cur.hash());
         }
+        let t1 = std::time::Instant::now(); // after the trace's hash, so refine_s doesn't include it
         if n_comm == cur.n() {
             break; // every community is one node: nothing to aggregate
         }
