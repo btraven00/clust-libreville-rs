@@ -1,0 +1,74 @@
+--- a/baselines/reference.py	2026-10-10 20:59:49.795763435 +0200
++++ b/baselines/reference.py	2026-10-10 21:00:15.731971999 +0200
+@@ -7,16 +7,29 @@
+ 
+ Replicates differ in Leiden's seed only: PCA (at seed 0) and the exact graph are computed once
+ and reused, so the spread of the reference's replicates is Leiden's own seed noise (the floor).
+-Leiden runs to convergence (n_iterations=-1): scanpy's default of 2 stops it part way, which put
++Leiden runs to convergence: scanpy's default of 2 iterations stops it part way, which put
+ every method ~0.02-0.05 ARI below a yardstick that was itself unconverged.
++
++Convergence is an explicit fixed point, not n_iterations=-1: igraph C < 0.10.17 runs exactly
++one iteration for -1 (BUGS.md BUG-1, igraph/igraph#2798). One igraph iteration at a time from the
++previous labels, one RNG stream seeded once, until an iteration moves no node. Iteration 1 is
++therefore the old `sc.tl.leiden(flavor="igraph", n_iterations=-1)` call on core 0.10.16. Every
++iteration is logged (obkit event `leiden_iter`), with a summary `leiden_converged`; a replicate
++that hits the cap fails rather than becoming the yardstick.
+ """
+ 
+ import anndata as ad
++import igraph as ig
+ import numpy as np
+ import scanpy as sc
++from obkit.logger import emit
++from scanpy._utils import get_igraph_from_adjacency
++from scanpy._utils.random import set_igraph_random_state
+ 
+ from brrr import Graph, Params, compose, run
+ 
++MAX_ITER = 1000  # igraph/igraph#2934: Leiden may never settle on some graphs; fail, don't hang
++
+ 
+ # ponytail: keyed on the input's size, which assumes one input per process (the driver's case)
+ _memo: dict = {}
+@@ -39,12 +52,35 @@
+     return _memo[key]
+ 
+ 
++def _canon(m) -> np.ndarray:
++    """Labels renumbered by first occurrence: equal partitions compare equal whatever the ids."""
++    _, first, inv = np.unique(m, return_index=True, return_inverse=True)
++    return np.argsort(np.argsort(first))[inv]
++
++
+ def cluster(g: Graph, p: Params) -> list:
+-    a = ad.AnnData(shape=(g.connectivities.shape[0], 0))
+-    a.obsp["connectivities"] = g.connectivities
+-    a.uns["neighbors"] = {"connectivities_key": "connectivities"}
+-    sc.tl.leiden(a, resolution=p.resolution, random_state=p.seed, flavor="igraph", n_iterations=-1, directed=False)
+-    return a.obs["leiden"].tolist()
++    # the graph exactly as sc.tl.leiden(flavor="igraph") builds it
++    ig_g = get_igraph_from_adjacency(g.connectivities, directed=False)
++    mem, q_first = None, None
++    with set_igraph_random_state(p.seed):  # one stream for the whole loop, like igraph's own -1
++        for it in range(1, MAX_ITER + 1):
++            part = ig_g.community_leiden(objective_function="modularity", weights="weight",
++                                         resolution=p.resolution, n_iterations=1,
++                                         initial_membership=None if mem is None else mem.tolist())
++            new = _canon(part.membership)
++            moved = len(new) if mem is None else int((new != mem).sum())
++            q = ig_g.modularity(new.tolist(), weights="weight", resolution=p.resolution)
++            q_first = q if q_first is None else q_first
++            emit("leiden_iter", "end", attrs=dict(seed=p.seed, iteration=it, quality=q, moved=moved,
++                                                   n_clusters=int(new.max()) + 1))
++            if moved == 0:
++                break
++            mem = new
++        else:
++            raise RuntimeError(f"Leiden did not converge in {MAX_ITER} iterations (seed {p.seed})")
++    emit("leiden_converged", "end", attrs=dict(seed=p.seed, iterations=it, quality_first=q_first,
++                                               quality=q, igraph_core=ig._igraph.__igraph_version__))
++    return [str(x) for x in new]
+ 
+ 
+ if __name__ == "__main__":
