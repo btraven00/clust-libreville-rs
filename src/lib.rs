@@ -68,8 +68,13 @@ fn iterate(g: &Graph, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32
     let mut labels: Vec<u32> = (0..g.n() as u32).collect();
     let cap = if o.n_iterations < 0 { MAX_ITERATIONS } else { o.n_iterations };
     for it in 0..cap {
+        let t = std::time::Instant::now();
         let next = canonical(&iteration(g, &labels, o, it as u64, hashes.as_deref_mut()));
         let done = next == labels;
+        if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+            let changed = next.iter().zip(&labels).filter(|(a, b)| a != b).count();
+            eprintln!("ITER {it} time {:.4} changed {changed} Q {:.7}", t.elapsed().as_secs_f64(), modularity(g, &next, o.resolution));
+        }
         labels = next;
         if done && o.n_iterations < 0 {
             return labels;

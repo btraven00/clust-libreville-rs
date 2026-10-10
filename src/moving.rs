@@ -88,7 +88,13 @@ pub(crate) fn move_nodes(g: &Graph, comm: &mut [u32], gamma: f64, tol: f64, seed
         size[comm[v] as usize] += 1;
     }
     let mut empty: Vec<u32> = (0..n as u32).rev().filter(|&c| size[c as usize] == 0).collect();
-    let groups = colour(g, &rng::order(n, seed, rng::COLOUR_ORDER, step));
+    let t_setup = std::time::Instant::now();
+    let order = rng::order(n, seed, rng::COLOUR_ORDER, step);
+    let t_order = t_setup.elapsed().as_secs_f64();
+    let groups = colour(g, &order);
+    if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+        eprintln!("    setup n {n}: order {t_order:.4} colour {:.4}", t_setup.elapsed().as_secs_f64() - t_order);
+    }
 
     let affected: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(true)).collect();
     let mut moved: Vec<u32> = Vec::new();
