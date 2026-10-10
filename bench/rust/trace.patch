@@ -1,0 +1,107 @@
+--- a/src/leiden.rs
++++ b/src/leiden.rs
+@@ -376,6 +376,7 @@
+             algorithm::RefinementBuffers::new(data.node_count(), 1);
+ 
+         for iteration in 0..self.config.max_iterations {
++            let t0 = std::time::Instant::now();
+             let q_before = quality.total_quality(&data, &partition);
+             let changed = local_moving_dispatch(
+                 std::slice::from_ref(&*data),
+@@ -410,6 +411,8 @@
+                 break;
+             }
+ 
++            let t_move = t0.elapsed().as_secs_f64();
++            let t1 = std::time::Instant::now();
+             let refined = if !self.config.skip_refinement {
+                 refinement(&data, &partition, quality, &mut rng, self.config.epsilon, &mut refinement_buffers)
+             } else {
+@@ -417,8 +420,19 @@
+                 partition.clone()
+             };
+ 
++            let t_refine = t1.elapsed().as_secs_f64();
++            let t2 = std::time::Instant::now();
+             let (agg_data, orig_to_agg, agg_initial_partition) =
+                 aggregate(&data, &refined, &partition, &self.config)?;
++            let t_agg = t2.elapsed().as_secs_f64();
++            if trace_on() {
++                eprintln!(
++                    "TRACE level={iteration} n={} slots={} comms={} refined={} move_disc={} refined_disc={} agg_hash={:016x} q={q_after:.12} t_move={t_move:.4} t_refine={t_refine:.4} t_agg={t_agg:.4}",
++                    data.node_count(), data.out_offsets[data.node_count()], partition.num_communities(),
++                    refined.num_communities(), trace_disconnected(&data, &partition),
++                    trace_disconnected(&data, &refined), trace_graph_hash(&agg_data)
++                );
++            }
+ 
+             for orig_node in 0..original_n {
+                 flat_mapping[orig_node] = orig_to_agg[flat_mapping[orig_node]];
+@@ -572,6 +586,45 @@
+     }
+ }
+ 
++/// TRACE (bench instrumentation, not upstream): enabled by env LEIDEN_TRACE.
++pub(crate) fn trace_on() -> bool {
++    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *T.get_or_init(|| std::env::var_os("LEIDEN_TRACE").is_some())
++}
++
++/// TRACE: hash of the graph's structure and exact weight bits.
++fn trace_graph_hash(d: &GraphData) -> u64 {
++    use std::hash::{Hash, Hasher};
++    let mut h = std::collections::hash_map::DefaultHasher::new();
++    d.out_offsets.hash(&mut h);
++    d.out_targets.hash(&mut h);
++    for w in &d.out_weights { w.to_bits().hash(&mut h); }
++    for w in &d.node_weight { w.to_bits().hash(&mut h); }
++    h.finish()
++}
++
++/// TRACE: number of communities of `p` whose induced subgraph in `d` is disconnected.
++fn trace_disconnected(d: &GraphData, p: &Partition) -> usize {
++    let n = d.node_count();
++    let mut seen = vec![false; n];
++    let mut parts = vec![0usize; p.num_communities()];
++    for s in 0..n {
++        if seen[s] { continue; }
++        parts[p.community_of(s)] += 1;
++        seen[s] = true;
++        let mut stack = vec![s];
++        while let Some(u) = stack.pop() {
++            for &v in d.neighbor_slices(u).0 {
++                if !seen[v] && p.community_of(v) == p.community_of(u) {
++                    seen[v] = true;
++                    stack.push(v);
++                }
++            }
++        }
++    }
++    parts.iter().filter(|&&c| c > 1).count()
++}
++
+ fn resolve_to_original_nodes(
+     flat_mapping: &[usize],
+     partition: &Partition,
+@@ -599,6 +652,9 @@
+         if should_use_parallel(&data[0], _config) {
+             let (parallel_changed, converged_naturally) =
+                 local_moving_parallel(&data[0], partition, quality, rng, cfg.max_comm_size, cfg.epsilon);
++            if trace_on() {
++                eprintln!("TRACE seq_fallback={}", !converged_naturally);
++            }
+             if converged_naturally {
+                 return parallel_changed;
+             }
+--- a/src/parallel.rs
++++ b/src/parallel.rs
+@@ -343,6 +343,9 @@
+         }
+     }
+ 
++    if crate::leiden::trace_on() {
++        eprintln!("TRACE colors={num_colors} rounds={iteration} n={n} converged={}", !any_move);
++    }
+     (changed, !any_move)
+ }
+ 

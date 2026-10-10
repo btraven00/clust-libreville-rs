@@ -1,0 +1,18 @@
+[package]
+name = "ldbench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Run ./setup.sh first: it creates vendor/ from the crates.io tarball + patches.
+[dependencies]
+leiden_stock = { package = "leiden-rs", version = "=0.8.1", default-features = false, features = ["rayon"] }
+leiden_trace = { package = "leiden-rs", path = "vendor/stock-trace", default-features = false, features = ["rayon"] }
+leiden_seqagg = { package = "leiden-rs", path = "vendor/seqagg", default-features = false, features = ["rayon"] }
+single-clustering = { version = "=0.7.0", default-features = false }
+npyz = { version = "0.8", features = ["npz"] }
+rayon = "1"
+rand = "0.9"
+
+[profile.release]
+debug = 1

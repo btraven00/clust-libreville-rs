@@ -1,0 +1,51 @@
+--- a/src/parallel.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/parallel.rs	2026-10-10 19:42:54.218904693 +0200
+@@ -94,22 +94,35 @@
+     orig_to_agg: &[usize],
+     directed: bool,
+ ) -> FxHashMap<(usize, usize), f64> {
++    // Deterministic: emit (key, w) in vertex/CSR order (order-preserving collect),
++    // stable-sort by key, then sum each key's run sequentially. The per-key sum
++    // order is the same as `aggregate_edges_sequential`, so the result is
++    // bit-identical to it at any thread count.
+     let n = data.node_count();
+-    (0..n)
++    let mut edges: Vec<((usize, usize), f64)> = (0..n)
+         .into_par_iter()
+-        .fold(FxHashMap::<(usize, usize), f64>::default, |mut local, u| {
+-            algorithm::aggregate_node_edges_into(data, u, orig_to_agg, directed, &mut local);
+-            local
+-        })
+-        .reduce(
+-            FxHashMap::<(usize, usize), f64>::default,
+-            |mut acc, local| {
+-                for (k, v) in local {
+-                    *acc.entry(k).or_default() += v;
++        .flat_map_iter(|u| {
++            let ru = orig_to_agg[u];
++            data.neighbors(u).filter_map(move |(v, w)| {
++                let rv = orig_to_agg[v];
++                if directed {
++                    Some(((ru, rv), w))
++                } else if u == v {
++                    Some(((ru, ru), w))
++                } else if v > u {
++                    Some((if ru <= rv { (ru, rv) } else { (rv, ru) }, w))
++                } else {
++                    None
+                 }
+-                acc
+-            },
+-        )
++            })
++        })
++        .collect();
++    edges.par_sort_by_key(|&(k, _)| k); // stable: keeps vertex order within a key
++    let mut map = FxHashMap::<(usize, usize), f64>::default();
++    for run in edges.chunk_by(|a, b| a.0 == b.0) {
++        map.insert(run[0].0, run.iter().fold(0.0, |s, &(_, w)| s + w));
++    }
++    map
+ }
+ 
+ /// Parallel local moving using graph coloring.
