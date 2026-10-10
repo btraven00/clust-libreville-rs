@@ -13,6 +13,7 @@ pub(crate) trait Weight: Copy + Send + Sync + Into<f64> + 'static {}
 impl Weight for f32 {}
 impl Weight for f64 {}
 
+#[derive(Clone)] // for Cow; never cloned in practice (the CPU backend borrows level 0)
 pub(crate) struct Csr<W> {
     pub(crate) offsets: Vec<usize>,
     pub(crate) targets: Vec<u32>,

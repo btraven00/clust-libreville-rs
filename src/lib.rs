@@ -6,12 +6,14 @@
 //! invariance). Phase 1: sequential. See PLAN.md.
 
 mod aggregate;
+mod backend;
 mod graph;
 mod moving;
 mod refine;
 mod rng;
 
 pub use graph::Graph;
+use backend::{Backend, Cpu};
 use graph::{Csr, Repr, Weight};
 
 #[derive(Clone, Debug)]
@@ -66,19 +68,20 @@ fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
     });
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("thread pool");
     match &g.0 {
-        Repr::F32(c) => pool.install(|| iterate(c, o, hashes)),
-        Repr::F64(c) => pool.install(|| iterate(c, o, hashes)),
+        Repr::F32(c) => pool.install(|| iterate(&Cpu, c, o, hashes)),
+        Repr::F64(c) => pool.install(|| iterate(&Cpu, c, o, hashes)),
     }
 }
 
-fn iterate<W: Weight>(g: &Csr<W>, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+    let up = b.upload(g);
     let mut labels: Vec<u32> = (0..g.n() as u32).collect();
     let cap = if o.n_iterations < 0 { MAX_ITERATIONS } else { o.n_iterations };
     let watch_gain = o.n_iterations < 0 && o.min_gain > 0.0;
     let mut q = f64::NEG_INFINITY;
     for it in 0..cap {
         let t = std::time::Instant::now();
-        let next = canonical(&iteration(g, &labels, o, it as u64, hashes.as_deref_mut()));
+        let next = canonical(&iteration(b, &up, &labels, o, it as u64, hashes.as_deref_mut()));
         let mut done = next == labels;
         if watch_gain || std::env::var_os("DETLEIDEN_TRACE").is_some() {
             let q_next = modularity_csr(g, &next, o.resolution);
@@ -100,16 +103,17 @@ fn iterate<W: Weight>(g: &Csr<W>, o: &Options, mut hashes: Option<&mut Vec<u64>>
 
 /// One Leiden iteration from `start`: move, refine, aggregate, until no level aggregates.
 /// Level 0 runs on the input graph (f32 or f64 weights), every coarse level on f64.
-fn iteration<W: Weight>(g: &Csr<W>, start: &[u32], o: &Options, it: u64, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
-    let mut node_of: Vec<u32> = (0..g.n() as u32).collect(); // coarse node of each vertex
+fn iteration<B: Backend, W: Weight>(b: &B, g: &B::Graph<'_, W>, start: &[u32], o: &Options, it: u64,
+                                    mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+    let mut node_of: Vec<u32> = (0..b.n(g) as u32).collect(); // coarse node of each vertex
     let mut comm = start.to_vec();
-    let mut next = level(g, &mut comm, o, it, 0, hashes.as_deref_mut());
+    let mut next = level(b, g, &mut comm, o, it, 0, hashes.as_deref_mut());
     for lvl in 1..MAX_LEVELS {
         let Some((agg, coarse)) = next else { break };
         for x in node_of.iter_mut() {
             *x = agg[*x as usize];
         }
-        next = level(&coarse, &mut comm, o, it, lvl, hashes.as_deref_mut());
+        next = level(b, &coarse, &mut comm, o, it, lvl, hashes.as_deref_mut());
     }
     node_of.iter().map(|&x| comm[x as usize]).collect()
 }
@@ -117,37 +121,36 @@ fn iteration<W: Weight>(g: &Csr<W>, start: &[u32], o: &Options, it: u64, mut has
 /// One level: move nodes, then refine and aggregate. `comm` becomes the partition of the next
 /// level's nodes. None when every community is one node (nothing to aggregate); otherwise the
 /// map from this level's nodes to the next level's, and the next level's graph.
-fn level<W: Weight>(cur: &Csr<W>, comm: &mut Vec<u32>, o: &Options, it: u64, level: u64,
-                    hashes: Option<&mut Vec<u64>>) -> Option<(Vec<u32>, Csr<f64>)> {
+fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32>, o: &Options, it: u64, level: u64,
+                                hashes: Option<&mut Vec<u64>>) -> Option<(Vec<u32>, B::Graph<'static, f64>)> {
     let trace = std::env::var_os("DETLEIDEN_TRACE").is_some();
     let step = it << 32 | level;
     if let Some(h) = hashes {
-        h.push(cur.hash());
+        h.push(b.hash(cur));
     }
     let t0 = std::time::Instant::now();
     let tol = o.tolerance / 10f64.powi(level as i32);
-    let groups = moving::colouring(cur, o.seed, step);
-    let (colours, rounds) = moving::move_nodes(cur, comm, o.resolution, tol, &groups);
+    let (colours, rounds) = b.move_nodes(cur, comm, o.resolution, tol, o.seed, step);
     let (dcomm, n_comm) = refine::dense(comm);
     let move_s = t0.elapsed().as_secs_f64();
     if trace {
         eprintln!("it {it} level {level} n {} m {} hash {:016x} colours {colours} rounds {rounds} communities {n_comm} move_s {move_s:.4}",
-                  cur.n(), cur.targets.len(), cur.hash());
+                  b.n(cur), b.edges(cur), b.hash(cur));
     }
     let t1 = std::time::Instant::now(); // after the trace's hash, so refine_s doesn't include it
-    if n_comm == cur.n() {
+    if n_comm == b.n(cur) {
         return None; // every community is one node: nothing to aggregate
     }
-    let (mut agg, mut n_agg) = refine::refine(cur, &dcomm, o.resolution, o.theta, o.seed, step);
+    let (mut agg, mut n_agg) = b.refine(cur, &dcomm, o.resolution, o.theta, o.seed, step);
     let t2 = std::time::Instant::now();
-    if n_agg == cur.n() {
+    if n_agg == b.n(cur) {
         (agg, n_agg) = (dcomm.clone(), n_comm); // refinement merged nothing: aggregate the moved partition (igraph)
     }
     let mut next_comm = vec![0u32; n_agg];
-    for v in 0..cur.n() {
+    for v in 0..b.n(cur) {
         next_comm[agg[v] as usize] = dcomm[v]; // each refined cluster lies in one community
     }
-    let next = aggregate::aggregate(cur, &agg, n_agg);
+    let next = b.aggregate(cur, &agg, n_agg);
     if trace {
         eprintln!("it {it} level {level}   refined {n_agg} refine_s {:.4} aggregate_s {:.4}",
                   (t2 - t1).as_secs_f64(), t2.elapsed().as_secs_f64());
