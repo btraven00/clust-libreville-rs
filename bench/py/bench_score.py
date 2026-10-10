@@ -117,6 +117,7 @@ def main():
     for d in tsvs:
         q = get(d, "modularity"); k = [x["attrs"]["n_clusters"] for x in q]; qv = [x["value"] for x in q]
         ar = [x["value"] for x in get(d, "ari_ref")]
+        ar = [x["value"] for x in get(d, "ari_ref") if x["rep"] is not None] or ar  # rep None = a copy of rep0 (ari.py emits both)
         rr = get(d, "rerun_ari_same_seed") + get(d, "rerun_ari_seeds")
         rv = rr[0] if rr else None
         nu = (1 - rv["value"]) / (1 - floor) if rv and floor and rv["metric"].endswith("same_seed") else None
