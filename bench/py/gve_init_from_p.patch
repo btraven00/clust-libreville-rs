@@ -1,0 +1,31 @@
+--- $PHD/brrr-gve/gve/inc/leiden.hxx
++++ gve/inc/leiden.hxx
+@@ -1,3 +1,5 @@
++#include <cstdlib>
++#include <vector>
+ #pragma once
+ #include <utility>
+ #include <tuple>
+@@ -1277,6 +1279,9 @@
+         else         leidenRenumberCommunitiesOmpW(vcom, cv.degrees, bufk, y);
+         if (isFirst) {}
+         else         leidenLookupCommunitiesOmpU(ucom, vcom);
++        // ABLATION (scratch copy only): remember each refined community's moved-partition (bound) community
++        std::vector<K> pcb(CN);
++        if (std::getenv("GVE_INIT_FROM_P")) { for (K u=0; u<K(GN); ++u) if ((isFirst? x.hasVertex(u) : y.hasVertex(u))) pcb[isFirst? ucom[u] : vcom[u]] = vcob[u]; }
+         ta += measureDuration([&]() {
+           cv.respan(CN); z.respan(CN);
+           if (isFirst) leidenCommunityVerticesOmpW(cv.offsets, cv.degrees, cv.edgeKeys, bufk, x, ucom);
+@@ -1292,6 +1297,12 @@
+         fillValueOmpU(vaff.data(), CN, B(1));
+         leidenVertexWeightsOmpW(vtot, y);
+         leidenInitializeOmpW(vcom, ctot, y, vtot);
++        if (std::getenv("GVE_INIT_FROM_P")) {  // ABLATION: coarse partition = the non-refined one (Leiden paper), not singletons
++          std::vector<K> rep(GN, K(-1));
++          for (K r=0; r<K(CN); ++r) if (rep[pcb[r]]==K(-1)) rep[pcb[r]] = r;
++          for (K r=0; r<K(CN); ++r) { vcom[r] = rep[pcb[r]]; ctot[r] = W(); }
++          for (K r=0; r<K(CN); ++r) ctot[vcom[r]] += vtot[r];
++        }
+         E /= o.toleranceDrop;
+       }
+       if (p<=1) {}
