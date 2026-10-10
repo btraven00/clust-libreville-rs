@@ -10,9 +10,12 @@
 //! Unlike igraph 0.10.16, the external weight of a vertex that stays alone is not
 //! double-counted (ext_C <- ext_C + ext_v - 2 w(v, C) on every insert).
 //!
-//! Refined cluster ids are vertex ids, so all state is indexed by vertex: communities never
-//! share an index and need no per-community reset (leiden-rs zeroes O(n) per community).
-//! Communities are independent; phase 2 runs them in parallel.
+//! Communities are independent, so they are refined in parallel (largest first, for balance),
+//! each with its own arrays indexed by position in the community. Inside a community the visit
+//! order and every sum are fixed, so the result doesn't depend on the thread count. Refined
+//! cluster ids are the ids of their founding vertices; no O(n) reset per community (leiden-rs).
+
+use rayon::prelude::*;
 
 use crate::graph::Graph;
 use crate::rng;
@@ -23,71 +26,96 @@ pub(crate) fn refine(g: &Graph, comm: &[u32], gamma: f64, theta: f64, seed: u64,
     let n = g.n();
     let scale = if g.total > 0.0 { gamma / g.total } else { 0.0 };
     let members = bucket(comm, n);
-    let mut refined: Vec<u32> = (0..n as u32).collect();
-    let mut cw = g.strength.clone(); // weight of each refined cluster
-    let mut size = vec![1u32; n];
-    let mut ext = vec![0.0f64; n]; // weight from each refined cluster to the rest of its community
-    let mut wt = vec![0.0f64; n];
-    let mut touched: Vec<u32> = Vec::new();
-    let mut cand: Vec<(u32, f64)> = Vec::new();
-    let mut p: Vec<f64> = Vec::new();
-
-    for s in members.iter().filter(|s| s.len() > 1) {
-        let c_s = comm[s[0] as usize];
-        let k_s: f64 = s.iter().map(|&v| g.strength[v as usize]).sum();
-        for &v in s {
-            let (t, w) = g.row(v as usize);
-            ext[v as usize] = t.iter().zip(w).filter(|&(&u, _)| u != v && comm[u as usize] == c_s).map(|(_, &w)| w).sum();
+    let mut pos = vec![0u32; n]; // position of each vertex in its community
+    for s in &members {
+        for (i, &v) in s.iter().enumerate() {
+            pos[v as usize] = i as u32;
         }
-        let mut order: Vec<(u64, u32)> = s.iter().map(|&v| (rng::key(seed, rng::REFINE_ORDER, step, v as u64), v)).collect();
-        order.sort_unstable();
-
-        for &(_, v) in &order {
-            let (vi, k) = (v as usize, g.strength[v as usize]);
-            let own = refined[vi] as usize;
-            let ext_v = ext[own];
-            if size[own] != 1 || ext_v < scale * k * (k_s - k) {
-                continue; // merged into, or not well-connected
-            }
-            // take v out: its singleton becomes empty
-            cw[own] = 0.0;
-            size[own] = 0;
-            ext[own] = 0.0;
-            let (t, w) = g.row(vi);
-            for (&u, &w) in t.iter().zip(w) {
-                if u != v && comm[u as usize] == c_s {
-                    let c = refined[u as usize];
-                    if wt[c as usize] == 0.0 {
-                        touched.push(c);
-                    }
-                    wt[c as usize] += w;
-                }
-            }
-            cand.clear();
-            cand.push((own as u32, 0.0)); // staying alone: gain 0
-            for &c in &touched {
-                let ci = c as usize;
-                if c as usize == own || ext[ci] < scale * cw[ci] * (k_s - cw[ci]) {
-                    continue;
-                }
-                let gain = wt[ci] - scale * k * cw[ci];
-                if gain >= 0.0 {
-                    cand.push((c, gain));
-                }
-            }
-            let chosen = choose(&cand, theta, rng::key(seed, rng::REFINE_DRAW, step, v as u64), &mut p) as usize;
-            let w_vc = if chosen == own { 0.0 } else { wt[chosen] };
-            refined[vi] = chosen as u32;
-            cw[chosen] += k;
-            size[chosen] += 1;
-            ext[chosen] += ext_v - 2.0 * w_vc;
-            for &c in &touched {
-                wt[c as usize] = 0.0;
-            }
-            touched.clear();
+    }
+    let mut big: Vec<&Vec<u32>> = members.iter().filter(|s| s.len() > 1).collect();
+    big.sort_by_key(|s| std::cmp::Reverse(s.len())); // stable: ties keep community order
+    let results: Vec<Vec<u32>> = big
+        .par_iter()
+        .map(|s| refine_one(g, comm, s, &pos, scale, theta, seed, step))
+        .collect();
+    let mut refined: Vec<u32> = (0..n as u32).collect();
+    for (s, r) in big.iter().zip(&results) {
+        for (&v, &c) in s.iter().zip(r) {
+            refined[v as usize] = s[c as usize];
         }
     }
     dense(&refined)
+}
+
+/// One community `s` (vertices in id order): the refined cluster of each member, as a position in `s`.
+#[allow(clippy::too_many_arguments)]
+fn refine_one(g: &Graph, comm: &[u32], s: &[u32], pos: &[u32], scale: f64, theta: f64, seed: u64, step: u64) -> Vec<u32> {
+    let len = s.len();
+    let c_s = comm[s[0] as usize];
+    let k_s: f64 = s.iter().map(|&v| g.strength[v as usize]).sum();
+    let mut refined: Vec<u32> = (0..len as u32).collect();
+    let mut cw: Vec<f64> = s.iter().map(|&v| g.strength[v as usize]).collect(); // weight of each refined cluster
+    let mut size = vec![1u32; len];
+    // weight from each refined cluster to the rest of its community
+    let mut ext: Vec<f64> = s
+        .iter()
+        .map(|&v| {
+            let (t, w) = g.row(v as usize);
+            t.iter().zip(w).filter(|&(&u, _)| u != v && comm[u as usize] == c_s).map(|(_, &w)| w).sum()
+        })
+        .collect();
+    let mut wt = vec![0.0f64; len];
+    let mut touched: Vec<u32> = Vec::new();
+    let mut cand: Vec<(u32, f64)> = Vec::new();
+    let mut p: Vec<f64> = Vec::new();
+    let mut order: Vec<(u64, u32)> = s.iter().map(|&v| (rng::key(seed, rng::REFINE_ORDER, step, v as u64), v)).collect();
+    order.sort_unstable();
+
+    for &(_, v) in &order {
+        let (vi, k) = (v as usize, g.strength[v as usize]);
+        let own = refined[pos[vi] as usize] as usize;
+        let ext_v = ext[own];
+        if size[own] != 1 || ext_v < scale * k * (k_s - k) {
+            continue; // merged into, or not well-connected
+        }
+        // take v out: its singleton becomes empty
+        cw[own] = 0.0;
+        size[own] = 0;
+        ext[own] = 0.0;
+        let (t, w) = g.row(vi);
+        for (&u, &w) in t.iter().zip(w) {
+            if u != v && comm[u as usize] == c_s {
+                let c = refined[pos[u as usize] as usize];
+                if wt[c as usize] == 0.0 {
+                    touched.push(c);
+                }
+                wt[c as usize] += w;
+            }
+        }
+        cand.clear();
+        cand.push((own as u32, 0.0)); // staying alone: gain 0
+        for &c in &touched {
+            let ci = c as usize;
+            if ci == own || ext[ci] < scale * cw[ci] * (k_s - cw[ci]) {
+                continue;
+            }
+            let gain = wt[ci] - scale * k * cw[ci];
+            if gain >= 0.0 {
+                cand.push((c, gain));
+            }
+        }
+        let chosen = choose(&cand, theta, rng::key(seed, rng::REFINE_DRAW, step, v as u64), &mut p) as usize;
+        let w_vc = if chosen == own { 0.0 } else { wt[chosen] };
+        refined[pos[vi] as usize] = chosen as u32;
+        cw[chosen] += k;
+        size[chosen] += 1;
+        ext[chosen] += ext_v - 2.0 * w_vc;
+        for &c in &touched {
+            wt[c as usize] = 0.0;
+        }
+        touched.clear();
+    }
+    refined
 }
 
 /// Draw from candidates (cluster, gain >= 0), the first being "stay". theta <= 0: the best gain
