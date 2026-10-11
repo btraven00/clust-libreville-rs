@@ -1,0 +1,23 @@
+[package]
+name = 'detleidenr'
+publish = false
+version = '0.1.0'
+edition = '2021'
+rust-version = '1.85'
+
+[lib]
+crate-type = [ 'rlib', 'staticlib' ]
+name = 'detleiden' # R_init_detleiden: the R package's name
+
+[[bin]]
+name = 'document'
+path = 'document.rs'
+
+[dependencies]
+extendr-api = '0.9'
+# ponytail: path dep, so install from the repo (R CMD INSTALL r); vendor it before building a CRAN tarball
+dl = { package = 'detleiden', path = '../../..' }
+
+[profile.release]
+lto = true
+codegen-units = 1
