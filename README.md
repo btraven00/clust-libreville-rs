@@ -6,4 +6,4 @@ Status: implemented (CPU; GPU backends via cubecl: CUDA, Metal in testing), with
 
 Lineage: GVE-Leiden (Sahu, arXiv:2312.13936, MIT) is the performance reference. Its moves are asynchronous, so it is nondeterministic with more than one thread. This crate uses synchronous, deterministic moves instead.
 
-**The name.** The great circle from Leiden through Louvain crosses the Equator about 50 km from Libreville, "free town".
+**The name.** The great circle from Leiden through Louvain crosses the Equator about 50 km from Libreville, "free town". If you prefer more determinism, run it through Louvain-la-Neuve (UCLouvain, where the method was born): it hits São Tomé within a few km, just off the Equator.
