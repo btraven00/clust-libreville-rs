@@ -18,9 +18,14 @@ use crate::moving::{self, FX};
 use crate::{Apply, Graph};
 
 /// Up to this many distinct neighbour communities per vertex fit the decide kernel's local
-/// arrays; a vertex with more takes an exact O(degree^2) rescan instead.
+/// arrays; a vertex with more is a hub, decided by `decide_hubs`.
 const MAXC: usize = 64;
 const STAY: u32 = 0xFFFF_FFFD;
+const HUB: u32 = 0xFFFF_FFFC;
+/// Rows up to this long are decided by the hub kernel in shared memory (power of two).
+const HUB_P: usize = 1024;
+/// Cubes of the hub kernel (it grid-strides over however many hubs a group has).
+const HUB_CUBES: u32 = 64;
 const NONE: u32 = 0xFFFF_FFFF;
 // moving::NEW = u32::MAX: a move to a new community (id n + v)
 /// Below this many vertices local moving stays on the CPU (launch overheads win).
@@ -70,10 +75,11 @@ pub fn row_sums_gpu(g: &Graph) -> (Vec<f32>, f64, f64) {
 /// The decide step, one thread per vertex of `verts` (skipping, and clearing, unaffected ones):
 /// an exact mirror of `moving::best_move` (same neighbour order, same f64 sums per community,
 /// same candidate order and strict `>`). Vertices with more than MAXC distinct neighbour
-/// communities rescan in O(degree^2) with the same summation order.
+/// communities are listed for `decide_hubs`.
 #[cube(launch_unchecked)]
 fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
-          scale: f64, verts: &[u32], affected: &mut [u32], out_to: &mut [u32], out_wto: &mut [f64], out_wfrom: &mut [f64]) {
+          scale: f64, verts: &[u32], affected: &mut [u32], out_to: &mut [u32], out_wto: &mut [f64], out_wfrom: &mut [f64],
+          hubs: &mut [u32], hub_count: &[Atomic<u32>]) {
     let i = ABSOLUTE_POS;
     if i < verts.len() {
         let v = verts[i] as usize;
@@ -111,19 +117,168 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], c
                     }
                 }
             }
-            let mut w_from = f64::new(0.0f32);
             if overflow {
-                for e in start..end {
-                    let u = targets[e];
-                    if u != v as u32 && comm[u as usize] == own {
-                        w_from += f64::cast_from(weights[e]);
-                    }
-                }
+                // too many distinct neighbour communities: the hub kernel decides this vertex
+                out_to[i] = HUB;
+                hubs[hub_count[0].fetch_add(1u32) as usize] = i as u32;
             } else {
+                let mut w_from = f64::new(0.0f32);
                 for j in 0..nt {
                     if cs[j] == own {
                         w_from = ws[j];
                     }
+                }
+                let mut best_c = own;
+                let mut best_g = w_from - scale * k * (tot[own as usize] - k);
+                let mut best_w = w_from;
+                if size[own as usize] > 1 && f64::new(0.0f32) > best_g {
+                    best_c = u32::MAX;
+                    best_g = f64::new(0.0f32);
+                    best_w = f64::new(0.0f32);
+                }
+                for j in 0..nt {
+                    let c = cs[j];
+                    if c != own {
+                        let gain = ws[j] - scale * k * tot[c as usize];
+                        if gain > best_g {
+                            best_c = c;
+                            best_g = gain;
+                            best_w = ws[j];
+                        }
+                    }
+                }
+                if best_c == own {
+                    out_to[i] = STAY;
+                } else {
+                    out_to[i] = best_c;
+                }
+                out_wto[i] = best_w;
+                out_wfrom[i] = w_from;
+            }
+        }
+    }
+}
+
+/// The decide step for hub vertices (more than MAXC distinct neighbour communities), one cube
+/// per hub, grid-striding over the hubs decide listed. The (community, edge) keys of the row are
+/// bitonic-sorted in shared memory, so each community's edges are contiguous and in CSR order;
+/// each community is then summed in that order, as `moving::best_move` sums it. Selection: the
+/// strictly best gain in first-occurrence order = the maximum gain, ties to the earliest first
+/// occurrence. Rows longer than HUB_P (none in our graphs) fall back to an O(degree^2) rescan.
+#[cube(launch_unchecked)]
+fn decide_hubs(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
+               scale: f64, verts: &[u32], hubs: &[u32], hub_count: &[Atomic<u32>], out_to: &mut [u32], out_wto: &mut [f64],
+               out_wfrom: &mut [f64]) {
+    let mut keys = Shared::<[u64]>::new_slice(HUB_P);
+    let count = hub_count[0].load() as usize;
+    let unit = UNIT_POS as usize;
+    let dim = CUBE_DIM as usize;
+    let mut h = CUBE_POS as usize;
+    while h < count {
+        let i = hubs[h] as usize;
+        let v = verts[i] as usize;
+        let (start, end) = (offsets[v] as usize, offsets[v + 1] as usize);
+        let deg = end - start;
+        let own = comm[v];
+        let k = strength[v];
+        if deg <= HUB_P {
+            let mut p = unit;
+            while p < HUB_P {
+                let mut key = !u64::new(0); // u64::MAX, as a runtime value
+                if p < deg {
+                    let u = targets[start + p];
+                    if u != v as u32 {
+                        key = (u64::cast_from(comm[u as usize]) << 32u64) | u64::cast_from(p);
+                    }
+                }
+                keys[p] = key;
+                p += dim;
+            }
+            sync_cube();
+            let mut width = 2usize;
+            while width <= HUB_P {
+                let mut stride = width / 2;
+                while stride > 0 {
+                    let mut t = unit;
+                    while t < HUB_P / 2 {
+                        let a = 2 * stride * (t / stride) + t % stride;
+                        let b = a + stride;
+                        let (ka, kb) = (keys[a], keys[b]);
+                        if (ka > kb) == ((a & width) == 0) {
+                            keys[a] = kb;
+                            keys[b] = ka;
+                        }
+                        t += dim;
+                    }
+                    sync_cube();
+                    stride /= 2;
+                }
+                width *= 2;
+            }
+            if unit == 0 {
+                // one serial pass over the sorted keys: each community's edges are contiguous and
+                // in CSR order, so a running sum per run is the CPU's summation order
+                let mut w_from = f64::new(0.0f32);
+                for p in 0..HUB_P {
+                    let kp = keys[p];
+                    if (kp >> 32u64) as u32 == own && (kp >> 32u64) != 0xFFFF_FFFFu64 {
+                        w_from += f64::cast_from(weights[start + (kp & 0xFFFF_FFFFu64) as usize]);
+                    }
+                }
+                let mut best_c = own;
+                let mut best_g = w_from - scale * k * (tot[own as usize] - k);
+                let mut best_w = w_from;
+                if size[own as usize] > 1 && f64::new(0.0f32) > best_g {
+                    best_c = u32::MAX;
+                    best_g = f64::new(0.0f32);
+                    best_w = f64::new(0.0f32);
+                }
+                let mut best_first = !u32::new(0); // first occurrence of the best candidate (MAX: own / new)
+                let mut cur_c = 0xFFFF_FFFFu64;
+                let mut cur_sum = f64::new(0.0f32);
+                let mut cur_first = 0u32;
+                for p in 0..HUB_P + 1 {
+                    // position HUB_P is a virtual sentinel that closes the last run
+                    let mut kp = !u64::new(0);
+                    if p < HUB_P {
+                        kp = keys[p];
+                    }
+                    let c = kp >> 32u64;
+                    if c != cur_c {
+                        if cur_c != 0xFFFF_FFFFu64 && cur_c as u32 != own {
+                            // close the run of community cur_c: the strictly best gain in first-
+                            // occurrence order = max gain, ties to the earliest first occurrence
+                            let gain = cur_sum - scale * k * tot[cur_c as usize];
+                            if gain > best_g || (gain == best_g && best_first != !u32::new(0) && cur_first < best_first) {
+                                best_c = cur_c as u32;
+                                best_g = gain;
+                                best_w = cur_sum;
+                                best_first = cur_first;
+                            }
+                        }
+                        cur_c = c;
+                        cur_sum = f64::new(0.0f32);
+                        cur_first = (kp & 0xFFFF_FFFFu64) as u32;
+                    }
+                    if c != 0xFFFF_FFFFu64 {
+                        cur_sum += f64::cast_from(weights[start + (kp & 0xFFFF_FFFFu64) as usize]);
+                    }
+                }
+                if best_c == own {
+                    out_to[i] = STAY;
+                } else {
+                    out_to[i] = best_c;
+                }
+                out_wto[i] = best_w;
+                out_wfrom[i] = w_from;
+            }
+        } else if unit == 0 {
+            // O(degree^2) rescan, in the same summation and candidate order
+            let mut w_from = f64::new(0.0f32);
+            for e in start..end {
+                let u = targets[e];
+                if u != v as u32 && comm[u as usize] == own {
+                    w_from += f64::cast_from(weights[e]);
                 }
             }
             let mut best_c = own;
@@ -134,47 +289,32 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], c
                 best_g = f64::new(0.0f32);
                 best_w = f64::new(0.0f32);
             }
-            if overflow {
-                // candidates in order of first occurrence in the row, each summed in row order
-                for e in start..end {
-                    let u = targets[e];
-                    if u != v as u32 {
-                        let c = comm[u as usize];
-                        if c != own {
-                            let mut first = true;
-                            for e2 in start..e {
-                                let u2 = targets[e2];
-                                if u2 != v as u32 && comm[u2 as usize] == c {
-                                    first = false;
-                                }
-                            }
-                            if first {
-                                let mut w = f64::new(0.0f32);
-                                for e3 in e..end {
-                                    let u3 = targets[e3];
-                                    if u3 != v as u32 && comm[u3 as usize] == c {
-                                        w += f64::cast_from(weights[e3]);
-                                    }
-                                }
-                                let gain = w - scale * k * tot[c as usize];
-                                if gain > best_g {
-                                    best_c = c;
-                                    best_g = gain;
-                                    best_w = w;
-                                }
+            for e in start..end {
+                let u = targets[e];
+                if u != v as u32 {
+                    let c = comm[u as usize];
+                    if c != own {
+                        let mut first = true;
+                        for e2 in start..e {
+                            let u2 = targets[e2];
+                            if u2 != v as u32 && comm[u2 as usize] == c {
+                                first = false;
                             }
                         }
-                    }
-                }
-            } else {
-                for j in 0..nt {
-                    let c = cs[j];
-                    if c != own {
-                        let gain = ws[j] - scale * k * tot[c as usize];
-                        if gain > best_g {
-                            best_c = c;
-                            best_g = gain;
-                            best_w = ws[j];
+                        if first {
+                            let mut w = f64::new(0.0f32);
+                            for e3 in e..end {
+                                let u3 = targets[e3];
+                                if u3 != v as u32 && comm[u3 as usize] == c {
+                                    w += f64::cast_from(weights[e3]);
+                                }
+                            }
+                            let gain = w - scale * k * tot[c as usize];
+                            if gain > best_g {
+                                best_c = c;
+                                best_g = gain;
+                                best_w = w;
+                            }
                         }
                     }
                 }
@@ -187,6 +327,8 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], c
             out_wto[i] = best_w;
             out_wfrom[i] = w_from;
         }
+        sync_cube(); // the next hub reuses the shared memory
+        h += CUBE_COUNT as usize;
     }
 }
 
@@ -212,8 +354,11 @@ fn resolve(verts: &[u32], len: u32, n: u32, comm: &[u32], out_to: &[u32], res_fr
 /// Link each proposal into its target's and its source's list (unordered; only the set matters).
 #[cube(launch_unchecked)]
 fn link(len: u32, out_to: &[u32], res_from: &[u32], res_to: &[u32], heads_to: &[Atomic<u32>], heads_from: &[Atomic<u32>],
-        next_to: &mut [u32], next_from: &mut [u32]) {
+        next_to: &mut [u32], next_from: &mut [u32], hub_count: &[Atomic<u32>]) {
     let i = ABSOLUTE_POS;
+    if i == 0 {
+        hub_count[0].store(0u32); // decide_hubs of this group has run; ready for the next group
+    }
     if i < len as usize && out_to[i] != STAY {
         next_to[i] = heads_to[res_to[i] as usize].exchange(i as u32);
         next_from[i] = heads_from[res_from[i] as usize].exchange(i as u32);
@@ -375,6 +520,7 @@ impl Gpu {
         let mg = groups.iter().map(|g| g.len()).max().unwrap_or(1).max(1);
         let (o_to, o_wto, o_wfrom) = (c.empty(mg * 4), c.empty(mg * 8), c.empty(mg * 8));
         let (r_from, r_to, n_to, n_from, h_acc) = (c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4));
+        let (h_hubs, h_hub_count) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])));
         let zero = [0u32];
         let mut rounds = 0;
         for _ in 0..1000 {
@@ -387,11 +533,15 @@ impl Gpu {
                 unsafe {
                     decide::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
                         arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale, arg(h_grp, len), arg(&h_aff, n),
-                        arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len));
+                        arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1));
+                    decide_hubs::launch_unchecked(c, CubeCount::Static(HUB_CUBES, 1, 1), CubeDim::new_1d(BLOCK), arg(&d.off, n + 1),
+                        arg(&d.targets, d.m), arg(&d.weights, d.m), arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids),
+                        arg(&h_size, ids), scale, arg(h_grp, len), arg(&h_hubs, len), arg(&h_hub_count, 1), arg(&o_to, len),
+                        arg(&o_wto, len), arg(&o_wfrom, len));
                     resolve::launch_unchecked(c, cc.clone(), cd.clone(), arg(h_grp, len), l, n as u32, arg(&h_comm, n), arg(&o_to, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids));
                     link::launch_unchecked(c, cc.clone(), cd.clone(), l, arg(&o_to, len), arg(&r_from, len), arg(&r_to, len),
-                        arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len), arg(&n_from, len));
+                        arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len), arg(&n_from, len), arg(&h_hub_count, 1));
                     accept::launch_unchecked(c, cc.clone(), cd.clone(), arg(h_grp, len), l, arg(&d.strength, n), arg(&d.kint, n),
                         arg(&h_tot_int, ids), arg(&h_size, ids), scale, arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len),
@@ -456,3 +606,55 @@ impl Backend for Gpu {
 }
 
 const _: () = assert!(FX == 16_777_216.0, "the kernels hard-code moving::FX");
+
+/// Debug: decide + decide_hubs once for all vertices of `g` under `comm`, against the CPU's
+/// best_move. Returns (vertices, hubs, mismatches); prints the first mismatches.
+#[doc(hidden)]
+pub fn check_decide(g: &Graph, comm: &[u32], gamma: f64) -> (usize, usize, usize) {
+    let Repr::F32(c) = &g.0 else { panic!("needs f32-exact weights") };
+    let gpu = Gpu::new();
+    let cl = &gpu.client;
+    let n = c.n();
+    let ids = 2 * n;
+    let scale = gamma / c.total;
+    let mut tot = vec![0.0f64; ids];
+    let mut size = vec![0u32; ids];
+    for v in 0..n {
+        tot[comm[v] as usize] += c.strength[v];
+        size[comm[v] as usize] += 1;
+    }
+    let (mut wt, mut touched) = (vec![0.0f64; ids], Vec::new());
+    let cpu: Vec<Option<moving::Move>> = (0..n as u32).map(|v| moving::best_move(c, v, comm, &tot, &size, scale, &mut wt, &mut touched)).collect();
+    let off: Vec<u32> = c.offsets.iter().map(|&o| o as u32).collect();
+    let verts: Vec<u32> = (0..n as u32).collect();
+    let h = |b: &[u8]| gpu.up(b);
+    let (h_off, h_t, h_w, h_s) = (h(u32::as_bytes(&off)), h(u32::as_bytes(&c.targets)), h(f32::as_bytes(&c.weights)), h(f64::as_bytes(&c.strength)));
+    let (h_c, h_tot, h_size, h_v, h_aff) = (h(u32::as_bytes(comm)), h(f64::as_bytes(&tot)), h(u32::as_bytes(&size)), h(u32::as_bytes(&verts)), h(u32::as_bytes(&vec![1u32; n])));
+    let (o_to, o_wto, o_wfrom, h_hubs, h_cnt) = (cl.empty(n * 4), cl.empty(n * 8), cl.empty(n * 8), cl.empty(n * 4), h(u32::as_bytes(&[0u32])));
+    let m = c.targets.len();
+    let (cc, cd) = Gpu::grid(n);
+    unsafe {
+        decide::launch_unchecked(cl, cc, cd, arg(&h_off, n + 1), arg(&h_t, m), arg(&h_w, m), arg(&h_s, n), arg(&h_c, n), arg(&h_tot, ids),
+            arg(&h_size, ids), scale, arg(&h_v, n), arg(&h_aff, n), arg(&o_to, n), arg(&o_wto, n), arg(&o_wfrom, n), arg(&h_hubs, n), arg(&h_cnt, 1));
+        decide_hubs::launch_unchecked(cl, CubeCount::Static(HUB_CUBES, 1, 1), CubeDim::new_1d(BLOCK), arg(&h_off, n + 1), arg(&h_t, m),
+            arg(&h_w, m), arg(&h_s, n), arg(&h_c, n), arg(&h_tot, ids), arg(&h_size, ids), scale, arg(&h_v, n), arg(&h_hubs, n), arg(&h_cnt, 1),
+            arg(&o_to, n), arg(&o_wto, n), arg(&o_wfrom, n));
+    }
+    let nh = u32::from_bytes(&cl.read_one(h_cnt).unwrap())[0] as usize;
+    let hubs: std::collections::HashSet<u32> = u32::from_bytes(&cl.read_one(h_hubs).unwrap())[..nh].iter().copied().collect();
+    let to = u32::from_bytes(&cl.read_one(o_to).unwrap()).to_vec();
+    let (wto, wfrom) = (f64::from_bytes(&cl.read_one(o_wto).unwrap()).to_vec(), f64::from_bytes(&cl.read_one(o_wfrom).unwrap()).to_vec());
+    let mut mism = 0;
+    for v in 0..n {
+        let gpu_v = (to[v] != STAY).then_some((to[v], wto[v].to_bits(), wfrom[v].to_bits()));
+        let cpu_v = cpu[v].as_ref().map(|m| (m.to, m.w_to.to_bits(), m.w_from.to_bits()));
+        if gpu_v != cpu_v {
+            if mism < 3 {
+                eprintln!("  mismatch v {v} hub {} deg {}: gpu {:?} cpu {:?}", hubs.contains(&(v as u32)), off[v + 1] - off[v],
+                          gpu_v.map(|x| (x.0, f64::from_bits(x.1), f64::from_bits(x.2))), cpu_v.map(|x| (x.0, f64::from_bits(x.1), f64::from_bits(x.2))));
+            }
+            mism += 1;
+        }
+    }
+    (n, nh, mism)
+}
