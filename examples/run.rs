@@ -1,4 +1,4 @@
-//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--apply sequential|orderfree] [--repeat R] [--gpu] [--out LABELS.npy]
+//! cargo run --release --example run -- GRAPH.npz [--seed S] [--resolution R] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--apply sequential|orderfree] [--repeat R] [--gpu] [--out LABELS.npy]
 //! GRAPH.npz: full symmetric CSR (indptr, indices, data), as bench/py/export_graph.py writes it.
 //! Prints one line: n, time_s (fastest leiden() call, the "algo only" time), median_s and times (every call, in order),
 //! build_s (Graph::from_csr), clusters, modularity. LABELS.npy: int64, graph row order.
@@ -11,6 +11,7 @@ fn main() {
     let flag = |name: &str| args.iter().position(|a| a == name).map(|i| args[i + 1].clone());
     let mut o = Options::default();
     if let Some(s) = flag("--seed") { o.seed = s.parse().unwrap(); }
+    if let Some(s) = flag("--resolution") { o.resolution = s.parse().unwrap(); }
     if let Some(s) = flag("--theta") { o.theta = s.parse().unwrap(); }
     if let Some(s) = flag("--niter") { o.n_iterations = s.parse().unwrap(); }
     if let Some(s) = flag("--threads") { o.threads = Some(s.parse().unwrap()); }

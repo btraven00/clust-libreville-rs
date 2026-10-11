@@ -8,9 +8,10 @@ modularity(graph, membership, resolution = 1)
 }
 \arguments{
 \item{graph}{Undirected weighted graph: a symmetric sparse matrix (anything
-\code{methods::as(graph, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat \code{Graph} such as
-\code{obj@graphs$RNA_snn}, a symmetric \code{dsCMatrix}, a pattern matrix) or an igraph graph
-(edge attribute \code{weight} if present).}
+\code{methods::as(graph, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat
+\code{Graph} such as \code{obj@graphs$RNA_snn}, a symmetric \code{dsCMatrix}, a pattern
+matrix) or an igraph graph (edge attribute \code{weight} if present, e.g. from
+\code{scran::buildSNNGraph()} or \code{bluster::makeSNNGraph()}).}
 
 \item{membership}{Labels, one per vertex (any atomic type).}
 
@@ -20,6 +21,11 @@ modularity(graph, membership, resolution = 1)
 A number.
 }
 \description{
-Newman's modularity at resolution \code{resolution}, summed in a fixed order (the quantity
-\code{\link[=leiden]{leiden()}} maximises).
+Newman's modularity at resolution \code{resolution}, summed in a fixed order
+(the quantity \code{\link[=leiden]{leiden()}} maximises).
+}
+\examples{
+f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+g <- Matrix::readMM(f)
+modularity(g, leiden(g))
 }

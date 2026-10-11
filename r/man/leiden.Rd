@@ -16,32 +16,41 @@ leiden(
 }
 \arguments{
 \item{graph}{Undirected weighted graph: a symmetric sparse matrix (anything
-\code{methods::as(graph, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat \code{Graph} such as
-\code{obj@graphs$RNA_snn}, a symmetric \code{dsCMatrix}, a pattern matrix) or an igraph graph
-(edge attribute \code{weight} if present).}
+\code{methods::as(graph, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat
+\code{Graph} such as \code{obj@graphs$RNA_snn}, a symmetric \code{dsCMatrix}, a pattern
+matrix) or an igraph graph (edge attribute \code{weight} if present, e.g. from
+\code{scran::buildSNNGraph()} or \code{bluster::makeSNNGraph()}).}
 
 \item{resolution}{Resolution of the modularity (gamma).}
 
 \item{seed}{Seed, a non-negative whole number below 2^53.}
 
-\item{n_iterations}{Leiden iterations; -1: until an iteration changes nothing.}
+\item{n_iterations}{Leiden iterations; -1: until an iteration changes
+nothing.}
 
 \item{theta}{Randomness of the refinement.}
 
-\item{min_gain}{With \code{n_iterations = -1}, also stop once an iteration gains less modularity
-than this (0: strict).}
+\item{min_gain}{With \code{n_iterations = -1}, also stop once an iteration gains
+less modularity than this (0: strict).}
 
-\item{threads}{Worker threads; \code{NULL}: all cores. Does not change the result.}
+\item{threads}{Worker threads; \code{NULL}: all cores. Does not change the
+result.}
 }
 \value{
-Integer community labels \verb{1..k}, community 1 the largest (ties: by smallest vertex),
-named by the graph's row names if it has them.
+Integer community labels \verb{1..k}, community 1 the largest (ties: by
+smallest vertex), named by the graph's row names if it has them.
 }
 \description{
-Leiden (Traag, Waltman & van Eck 2019) with modularity (resolution \code{resolution}), seeded and
-deterministic: the same \code{seed} gives the same labels at any number of threads.
+Leiden (Traag, Waltman & van Eck 2019) maximising modularity at resolution
+\code{resolution}, seeded and deterministic: the same \code{seed} gives the same
+labels at any number of threads.
 }
 \examples{
-m <- Matrix::sparseMatrix(i = c(1, 2, 3, 4), j = c(2, 3, 4, 1), x = 1, dims = c(4, 4), symmetric = TRUE)
-leiden(m, seed = 1)
+f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+g <- Matrix::readMM(f)
+labels <- leiden(g, resolution = 1, seed = 0)
+table(labels)
+}
+\seealso{
+\code{\link[=cluster_detleiden]{cluster_detleiden()}} for igraph and bluster.
 }
