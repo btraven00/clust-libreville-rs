@@ -48,15 +48,16 @@ fn load(name: &str) -> Option<Graph> {
     Some(Graph::from_csr(&indptr, &indices, &data).unwrap())
 }
 
-/// The hao2021 graphs (bench/graphs, git-ignored): every thread count, and the phase-1
-/// (sequential, 4783e5d) labels exactly. `cargo test --release -- --ignored`
+/// The hao2021 graphs (bench/graphs, git-ignored): every thread count, and the locked labels
+/// exactly (phase 1, 4783e5d; re-locked for the order-free apply rule, option C: 50k/100k seed
+/// 101 changed, the rest identical). `cargo test --release -- --ignored`
 #[test]
 #[ignore]
-fn hao2021_matches_phase1_at_every_thread_count() {
+fn hao2021_matches_lock_at_every_thread_count() {
     let lock = [
         ("hao2021_10k", 100, 0x87ded254a27d8377u64), ("hao2021_10k", 101, 0x927306921a2dcc27),
-        ("hao2021_50k", 100, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, 0x6cd3a3991e9d2160),
-        ("hao2021_100k", 100, 0x7ec81e3557da7095), ("hao2021_100k", 101, 0x12c848f6a5f824ac),
+        ("hao2021_50k", 100, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, 0x77b396f3ffb7f00f),
+        ("hao2021_100k", 100, 0x7ec81e3557da7095), ("hao2021_100k", 101, 0x30f4d82485c5536a),
     ];
     for (name, seed, want) in lock {
         let Some(g) = load(name) else { eprintln!("skip {name}: no graph"); continue };

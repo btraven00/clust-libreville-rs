@@ -184,13 +184,17 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
         return (0, 0);
     }
     let scale = gamma / g.total;
-    let mut tot = vec![0.0f64; n];
-    let mut size = vec![0u32; n];
+    // community ids < 2n: a vertex v that leaves for a new community takes id n + v
+    let mut tot = vec![0.0f64; 2 * n];
+    let mut size = vec![0u32; 2 * n];
     for v in 0..n {
         tot[comm[v] as usize] += g.strength[v];
         size[comm[v] as usize] += 1;
     }
-    let mut empty: Vec<u32> = (0..n as u32).rev().filter(|&c| size[c as usize] == 0).collect();
+    // proposal prefix sums per community (group order), reset after each group
+    let (mut inc, mut outg, mut outc) = (vec![0.0f64; 2 * n], vec![0.0f64; 2 * n], vec![0u32; 2 * n]);
+    let mut seen: Vec<u32> = Vec::new();
+    let mut acc: Vec<(u32, u32, u32, f64)> = Vec::new();
 
 
     let affected: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(true)).collect();
@@ -213,38 +217,58 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     }
                     SCRATCH.with(|s| {
                         let (wt, touched) = &mut *s.borrow_mut();
-                        if wt.len() < n {
-                            wt.resize(n, 0.0);
+                        if wt.len() < 2 * n {
+                            wt.resize(2 * n, 0.0); // community ids < 2n
                         }
                         best_move(g, v, frozen, &tot, &size, scale, wt, touched)
                     })
                 })
                 .collect();
-            // apply, in order, re-checking the gain against the totals as they are now
-            moved.clear();
+            // Apply. A move is accepted against the frozen totals, made pessimistic by every
+            // *earlier proposal* of this group (group order): the target counts all proposals into
+            // it, the source loses all proposals out of it. Only prefix sums over proposals, so no
+            // accept depends on another accept: parallel-friendly (a GPU does it with a stable
+            // sort and per-community scans in the same order) and bit-identical either way.
+            acc.clear();
             for m in &moves {
                 let (v, k) = (m.v as usize, g.strength[m.v as usize]);
                 let from = comm[v] as usize;
-                let stay = m.w_from - scale * k * (tot[from] - k);
-                let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * tot[m.to as usize] };
-                if go <= stay || (m.to == NEW && size[from] == 1) {
-                    continue; // no longer an improvement, or already alone
-                }
-                round_gain += go - stay;
-                let to = if m.to == NEW {
-                    empty.pop().expect("an empty community exists while one has 2+ members")
+                let to = if m.to == NEW { n + v } else { m.to as usize };
+                let stay = m.w_from - scale * k * (tot[from] - k - outg[from]);
+                let ok = if m.to == NEW {
+                    // a new community must be empty now and v must not be left alone already
+                    size[to] == 0 && size[from] - outc[from] > 1 && 0.0 > stay
                 } else {
-                    m.to
-                } as usize;
+                    m.w_to - scale * k * (tot[to] + inc[to]) > stay
+                };
+                if ok {
+                    let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * (tot[to] + inc[to]) };
+                    acc.push((v as u32, from as u32, to as u32, go - stay));
+                }
+                for x in [from, to] {
+                    if outc[x] == 0 && inc[x] == 0.0 && outg[x] == 0.0 {
+                        seen.push(x as u32);
+                    }
+                }
+                inc[to] += k;
+                outg[from] += k;
+                outc[from] += 1;
+            }
+            for &x in &seen {
+                (inc[x as usize], outg[x as usize], outc[x as usize]) = (0.0, 0.0, 0);
+            }
+            seen.clear();
+            // update totals per community in group order (a fixed f64 sequence per community)
+            moved.clear();
+            for &(v, from, to, gain) in &acc {
+                let (from, to, k) = (from as usize, to as usize, g.strength[v as usize]);
+                round_gain += gain;
                 tot[from] -= k;
                 size[from] -= 1;
-                if size[from] == 0 {
-                    empty.push(from as u32);
-                }
                 tot[to] += k;
                 size[to] += 1;
-                comm[v] = to as u32;
-                moved.push(v as u32);
+                comm[v as usize] = to as u32;
+                moved.push(v);
             }
             round_moves += moved.len();
             // mark, in parallel, the neighbours now in another community
