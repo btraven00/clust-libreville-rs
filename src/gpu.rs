@@ -648,12 +648,405 @@ fn mark(offsets: &[u32], targets: &[u32], comm: &[u32], alist: &mut [u32], goff:
     }
 }
 
+
+// ---- refinement (refine::refine_orderfree, bit for bit) ----------------------------------------
+
+/// exp(x) for x <= 0 as (1 + x/256)^256 (rng::exp_neg).
+#[cube]
+fn exp_neg(x: f64) -> f64 {
+    let mut r = f64::new(0.0f32);
+    if x >= f64::new(-256.0f32) {
+        r = f64::new(1.0f32) + x / f64::new(256.0f32);
+        for _ in 0..8u32 {
+            r = r * r;
+        }
+    }
+    r
+}
+
+/// fx(x) = x / FX (moving::fx).
+#[cube]
+fn fxv(x: i64) -> f64 {
+    f64::cast_from(x) / f64::new(16_777_216.0f32)
+}
+
+/// A refinement candidate's gain, or -1 if c is not a candidate (refine::propose): c must not be
+/// v's own cluster, must be well-connected, and must gain >= 0.
+#[cube]
+fn rf_gain(c: u32, wsum: i64, own: u32, ext: &[i64], cw: &[i64], scale: f64, k: f64, k_s: f64) -> f64 {
+    let cwf = fxv(cw[c as usize]);
+    let mut g = f64::new(-1.0f32);
+    if c != own && fxv(ext[c as usize]) >= scale * cwf * (k_s - cwf) {
+        let gain = fxv(wsum) - scale * k * cwf;
+        if gain >= f64::new(0.0f32) {
+            g = gain;
+        }
+    }
+    g
+}
+
+#[cube(launch_unchecked)]
+fn rf_init(offsets: &[u32], targets: &[u32], wint: &[i64], comm: &[u32], kint: &[i64], refd: &mut [u32], cw: &mut [i64],
+           size: &mut [u32], ext: &mut [i64], ks: &[Atomic<i64>]) {
+    let v = ABSOLUTE_POS;
+    if v < refd.len() {
+        refd[v] = v as u32;
+        cw[v] = kint[v];
+        size[v] = 1;
+        let cv = comm[v];
+        let mut e = i64::new(0);
+        for j in offsets[v] as usize..offsets[v + 1] as usize {
+            let u = targets[j] as usize;
+            if u != v && comm[u] == cv {
+                e += wint[j];
+            }
+        }
+        ext[v] = e;
+        ks[cv as usize].fetch_add(kint[v]);
+    }
+}
+
+/// One refinement proposal per vertex of the group (refine::propose), against the frozen state.
+/// Vertices with more than MAXC distinct candidate clusters go to rf_hubs.
+#[cube(launch_unchecked)]
+fn rf_propose(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[f64], comm: &[u32], refd: &[u32], cw: &[i64],
+              size: &[u32], ext: &[i64], ks: &[i64], scale: f64, theta: f64, prefix: u64, c0: u64, c1: u64, c2: u64,
+              verts: &[u32], len: u32, out_to: &mut [u32], out_w: &mut [i64], out_ext: &mut [i64], hubs: &mut [u32],
+              hub_count: &[Atomic<u32>]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < len as usize {
+        let v = verts[i] as usize;
+        let own = refd[v];
+        out_to[i] = STAY;
+        if size[own as usize] == 1 {
+            let cs_ = comm[v];
+            let k = strength[v];
+            let k_s = fxv(ks[cs_ as usize]);
+            let ext_v = ext[own as usize];
+            if fxv(ext_v) >= scale * k * (k_s - k) {
+                let mut cl = Array::<u32>::new(MAXC);
+                let mut ws = Array::<i64>::new(MAXC);
+                let mut nt = 0usize;
+                let mut overflow = false;
+                for e in offsets[v] as usize..offsets[v + 1] as usize {
+                    let u = targets[e] as usize;
+                    if u != v && comm[u] == cs_ && !overflow {
+                        let c = refd[u];
+                        let mut found = false;
+                        for j in 0..nt {
+                            if !found && cl[j] == c {
+                                ws[j] += wint[e];
+                                found = true;
+                            }
+                        }
+                        if !found {
+                            if nt < MAXC {
+                                cl[nt] = c;
+                                ws[nt] = wint[e];
+                                nt += 1;
+                            } else {
+                                overflow = true;
+                            }
+                        }
+                    }
+                }
+                if overflow {
+                    out_to[i] = HUB;
+                    hubs[hub_count[0].fetch_add(1u32) as usize] = i as u32;
+                } else {
+                    // candidates in sorted cluster order: rank sort (clusters distinct, nt <= MAXC;
+                    // for-ranges only: an inner while over a copy of the loop variable hangs in cubecl)
+                    let mut sc = Array::<u32>::new(MAXC);
+                    let mut sw = Array::<i64>::new(MAXC);
+                    for a in 0..nt {
+                        let mut r = 0usize;
+                        for b in 0..nt {
+                            if cl[b] < cl[a] {
+                                r += 1;
+                            }
+                        }
+                        sc[r] = cl[a];
+                        sw[r] = ws[a];
+                    }
+                    for a in 0..nt {
+                        cl[a] = sc[a];
+                        ws[a] = sw[a];
+                    }
+                    // choose (refine::choose): best = first maximum, own (gain 0) first
+                    let mut best_c = own;
+                    let mut best_g = f64::new(0.0f32);
+                    let mut best_w = i64::new(0);
+                    let mut ncand = 1u32;
+                    for j in 0..nt {
+                        let g = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                        if g >= f64::new(0.0f32) {
+                            ncand += 1;
+                            if g > best_g {
+                                best_c = cl[j];
+                                best_g = g;
+                                best_w = ws[j];
+                            }
+                        }
+                    }
+                    let mut chosen = best_c;
+                    let mut chosen_w = best_w;
+                    if theta > f64::new(0.0f32) && ncand > 1 {
+                        let mut sum = exp_neg((f64::new(0.0f32) - best_g) / theta);
+                        for j in 0..nt {
+                            let g = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                            if g >= f64::new(0.0f32) {
+                                sum += exp_neg((g - best_g) / theta);
+                            }
+                        }
+                        let key = mix64(prefix ^ u64::cast_from(v), c0, c1, c2);
+                        let r = f64::cast_from(key >> 11u64) * (f64::new(1.0f32) / f64::new(9_007_199_254_740_992.0f32)) * sum;
+                        // first candidate whose cumulative weight exceeds r; the last if none
+                        let mut cum = exp_neg((f64::new(0.0f32) - best_g) / theta);
+                        let mut done = cum > r;
+                        chosen = own;
+                        chosen_w = i64::new(0);
+                        for j in 0..nt {
+                            let g = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                            if g >= f64::new(0.0f32) && !done {
+                                cum += exp_neg((g - best_g) / theta);
+                                chosen = cl[j];
+                                chosen_w = ws[j];
+                                if cum > r {
+                                    done = true;
+                                }
+                            }
+                        }
+                    }
+                    if chosen != own {
+                        out_to[i] = chosen;
+                        out_w[i] = chosen_w;
+                        out_ext[i] = ext_v;
+                    }
+                }
+            }
+        }
+        i += stride;
+    }
+}
+
+/// Refinement proposals of hub vertices: one cube per hub, (cluster, edge) keys sorted in shared
+/// memory, so runs come in sorted cluster order (the candidate order); then a serial choose.
+#[cube(launch_unchecked)]
+fn rf_hubs(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[f64], comm: &[u32], refd: &[u32], cw: &[i64],
+           ext: &[i64], ks: &[i64], scale: f64, theta: f64, prefix: u64, c0: u64, c1: u64, c2: u64, verts: &[u32],
+           hubs: &[u32], hub_count: &[Atomic<u32>], out_to: &mut [u32], out_w: &mut [i64], out_ext: &mut [i64]) {
+    let mut keys = Shared::<[u64]>::new_slice(HUB_P);
+    let count = hub_count[0].load() as usize;
+    let unit = UNIT_POS as usize;
+    let dim = CUBE_DIM as usize;
+    let mut h = CUBE_POS as usize;
+    while h < count {
+        let i = hubs[h] as usize;
+        let v = verts[i] as usize;
+        let (start, end) = (offsets[v] as usize, offsets[v + 1] as usize);
+        let deg = end - start;
+        let own = refd[v];
+        let cs_ = comm[v];
+        let k = strength[v];
+        let k_s = fxv(ks[cs_ as usize]);
+        let ext_v = ext[own as usize];
+        let mut p = unit;
+        while p < HUB_P {
+            let mut key = !u64::new(0);
+            if p < deg {
+                let u = targets[start + p] as usize;
+                if u != v && comm[u] == cs_ {
+                    key = (u64::cast_from(refd[u]) << 32u64) | u64::cast_from(p);
+                }
+            }
+            keys[p] = key;
+            p += dim;
+        }
+        sync_cube();
+        let mut width = 2usize;
+        while width <= HUB_P {
+            let mut stride = width / 2;
+            while stride > 0 {
+                let mut t = unit;
+                while t < HUB_P / 2 {
+                    let a = 2 * stride * (t / stride) + t % stride;
+                    let b = a + stride;
+                    let (ka, kb) = (keys[a], keys[b]);
+                    if (ka > kb) == ((a & width) == 0) {
+                        keys[a] = kb;
+                        keys[b] = ka;
+                    }
+                    t += dim;
+                }
+                sync_cube();
+                stride /= 2;
+            }
+            width *= 2;
+        }
+        if unit == 0 {
+            // pass 1: best (first maximum, own first); pass 2: total weight; pass 3: the draw
+            let mut best_c = own;
+            let mut best_g = f64::new(0.0f32);
+            let mut best_w = i64::new(0);
+            let mut ncand = 1u32;
+            let mut sum = f64::new(0.0f32);
+            let mut cum = f64::new(0.0f32);
+            let mut r = f64::new(0.0f32);
+            let mut done = false;
+            let mut chosen = own;
+            let mut chosen_w = i64::new(0);
+            for pass in 0..3u32 {
+                if pass == 1 {
+                    sum = exp_neg((f64::new(0.0f32) - best_g) / theta);
+                }
+                if pass == 2 {
+                    let key = mix64(prefix ^ u64::cast_from(v), c0, c1, c2);
+                    r = f64::cast_from(key >> 11u64) * (f64::new(1.0f32) / f64::new(9_007_199_254_740_992.0f32)) * sum;
+                    cum = exp_neg((f64::new(0.0f32) - best_g) / theta);
+                    done = cum > r;
+                }
+                let mut cur_c = 0xFFFF_FFFFu64;
+                let mut cur_w = i64::new(0);
+                for q in 0..HUB_P + 1 {
+                    let mut kq = !u64::new(0);
+                    if q < HUB_P {
+                        kq = keys[q];
+                    }
+                    let c = kq >> 32u64;
+                    if c != cur_c {
+                        if cur_c != 0xFFFF_FFFFu64 {
+                            let g = rf_gain(cur_c as u32, cur_w, own, ext, cw, scale, k, k_s);
+                            if g >= f64::new(0.0f32) {
+                                if pass == 0 {
+                                    ncand += 1;
+                                    if g > best_g {
+                                        best_c = cur_c as u32;
+                                        best_g = g;
+                                        best_w = cur_w;
+                                    }
+                                } else if pass == 1 {
+                                    sum += exp_neg((g - best_g) / theta);
+                                } else if !done {
+                                    cum += exp_neg((g - best_g) / theta);
+                                    chosen = cur_c as u32;
+                                    chosen_w = cur_w;
+                                    if cum > r {
+                                        done = true;
+                                    }
+                                }
+                            }
+                        }
+                        cur_c = c;
+                        cur_w = i64::new(0);
+                    }
+                    if c != 0xFFFF_FFFFu64 {
+                        cur_w += wint[start + (kq & 0xFFFF_FFFFu64) as usize];
+                    }
+                }
+            }
+            if theta <= f64::new(0.0f32) || ncand == 1 {
+                chosen = best_c;
+                chosen_w = best_w;
+            }
+            if chosen == own {
+                out_to[i] = STAY;
+            } else {
+                out_to[i] = chosen;
+                out_w[i] = chosen_w;
+                out_ext[i] = ext_v;
+            }
+        }
+        sync_cube();
+        h += CUBE_COUNT as usize;
+    }
+}
+
+/// Reset the list heads of this group's proposal targets.
+#[cube(launch_unchecked)]
+fn rf_reset(len: u32, out_to: &[u32], heads: &[Atomic<u32>]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < len as usize {
+        if out_to[i] != STAY {
+            heads[out_to[i] as usize].store(NONE);
+        }
+        i += stride;
+    }
+}
+
+#[cube(launch_unchecked)]
+fn rf_link(len: u32, out_to: &[u32], heads: &[Atomic<u32>], next: &mut [u32], hub_count: &[Atomic<u32>]) {
+    if ABSOLUTE_POS == 0 {
+        hub_count[0].store(0u32);
+    }
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < len as usize {
+        if out_to[i] != STAY {
+            next[i] = heads[out_to[i] as usize].exchange(i as u32);
+        }
+        i += stride;
+    }
+}
+
+/// Accept a proposal into C if its gain stays >= 0 against C's frozen weight plus the earlier
+/// proposals of the group into C (refine::refine_orderfree); then apply the accepted ones.
+#[cube(launch_unchecked)]
+fn rf_accept(verts: &[u32], len: u32, keys: &[u64], strength: &[f64], kint: &[i64], cw: &[i64], scale: f64, out_to: &[u32],
+             out_w: &[i64], heads: &[Atomic<u32>], next: &[u32], acc: &mut [u32]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < len as usize {
+        acc[i] = 0;
+        if out_to[i] != STAY {
+            let v = verts[i] as usize;
+            let c = out_to[i] as usize;
+            let mut inc = i64::new(0);
+            let mut j = heads[c].load();
+            while j != NONE {
+                if earlier(keys, verts[j as usize] as usize, v) {
+                    inc += kint[verts[j as usize] as usize];
+                }
+                j = next[j as usize];
+            }
+            if fxv(out_w[i]) - scale * strength[v] * fxv(cw[c] + inc) >= f64::new(0.0f32) {
+                acc[i] = 1;
+            }
+        }
+        i += stride;
+    }
+}
+
+#[cube(launch_unchecked)]
+fn rf_apply(verts: &[u32], len: u32, kint: &[i64], acc: &[u32], out_to: &[u32], out_w: &[i64], out_ext: &[i64],
+            refd: &mut [u32], cw: &[Atomic<i64>], size: &[Atomic<u32>], ext: &[Atomic<i64>]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < len as usize {
+        if acc[i] == 1 {
+            let v = verts[i] as usize;
+            let own = refd[v] as usize;
+            let c = out_to[i] as usize;
+            cw[own].store(i64::new(0));
+            size[own].store(0u32);
+            ext[own].store(i64::new(0));
+            refd[v] = c as u32;
+            cw[c].fetch_add(kint[v]);
+            size[c].fetch_add(1u32);
+            ext[c].fetch_add(out_ext[i] - out_w[i] - out_w[i]);
+        }
+        i += stride;
+    }
+}
+
 pub(crate) struct DevGraph {
     off: Handle,
     targets: Handle,
     weights: Handle,
     strength: Handle,
     kint: Handle,
+    wint: Handle, // fixed-point edge weights (moving::to_fx, on the host: no rounding on the device)
     m: usize,
 }
 
@@ -746,6 +1139,51 @@ impl Gpu {
         (counts, goffs, h_keys, h_colour, h_alist)
     }
 
+    /// refine::refine_orderfree on the device: refined labels (dense) and their count.
+    fn refine_dev(&self, d: &DevGraph, n: usize, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, total: f64) -> (Vec<u32>, usize) {
+        let c = &self.client;
+        let scale = if total > 0.0 { gamma / total } else { 0.0 };
+        let (lens, goffs, h_keys, _, h_alist) = self.colour_dev(d, n, seed, step); // = local moving's colouring
+        let prefix = crate::rng::mix(crate::rng::mix(crate::rng::mix(seed) ^ crate::rng::REFINE_DRAW) ^ step);
+        let (k0, k1, k2) = (0x9E37_79B9_7F4A_7C15u64, 0xBF58_476D_1CE4_E5B9u64, 0x94D0_49BB_1331_11EBu64);
+        let h_comm = self.up(u32::as_bytes(comm));
+        let (h_refd, h_cw, h_size, h_ext) = (c.empty(n * 4), c.empty(n * 8), c.empty(n * 4), c.empty(n * 8));
+        let h_ks = self.up(i64::as_bytes(&vec![0i64; n]));
+        let mg = lens.iter().copied().max().unwrap_or(1).max(1) as usize;
+        let (o_to, o_w, o_ext, h_next, h_acc) = (c.empty(mg * 4), c.empty(mg * 8), c.empty(mg * 8), c.empty(mg * 4), c.empty(mg * 4));
+        let (h_hubs, h_hub_count, h_heads) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])), c.empty(n * 4));
+        let (cc, cd) = Self::grid(n);
+        unsafe {
+            rf_init::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&h_comm, n),
+                arg(&d.kint, n), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n), arg(&h_ks, n));
+        }
+        for (gi, &glen) in lens.iter().enumerate() {
+            let len = glen as usize;
+            let l = glen;
+            let verts = h_alist.clone().offset_start(goffs[gi] as u64 * 4);
+            let (gc, gd) = Self::grid(len.min(GRID_CAP));
+            unsafe {
+                rf_propose::launch_unchecked(c, gc.clone(), gd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m),
+                    arg(&d.strength, n), arg(&h_comm, n), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n), arg(&h_ks, n),
+                    scale, theta, prefix, k0, k1, k2, arg(&verts, len), l, arg(&o_to, len), arg(&o_w, len), arg(&o_ext, len),
+                    arg(&h_hubs, len), arg(&h_hub_count, 1));
+                rf_hubs::launch_unchecked(c, CubeCount::Static(HUB_CUBES, 1, 1), CubeDim::new_1d(BLOCK), arg(&d.off, n + 1),
+                    arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&d.strength, n), arg(&h_comm, n), arg(&h_refd, n), arg(&h_cw, n),
+                    arg(&h_ext, n), arg(&h_ks, n), scale, theta, prefix, k0, k1, k2, arg(&verts, len), arg(&h_hubs, len),
+                    arg(&h_hub_count, 1), arg(&o_to, len), arg(&o_w, len), arg(&o_ext, len));
+                rf_reset::launch_unchecked(c, gc.clone(), gd.clone(), l, arg(&o_to, len), arg(&h_heads, n));
+                rf_link::launch_unchecked(c, gc.clone(), gd.clone(), l, arg(&o_to, len), arg(&h_heads, n), arg(&h_next, len), arg(&h_hub_count, 1));
+                rf_accept::launch_unchecked(c, gc.clone(), gd.clone(), arg(&verts, len), l, arg(&h_keys, n), arg(&d.strength, n),
+                    arg(&d.kint, n), arg(&h_cw, n), scale, arg(&o_to, len), arg(&o_w, len), arg(&h_heads, n), arg(&h_next, len),
+                    arg(&h_acc, len));
+                rf_apply::launch_unchecked(c, gc, gd, arg(&verts, len), l, arg(&d.kint, n), arg(&h_acc, len), arg(&o_to, len),
+                    arg(&o_w, len), arg(&o_ext, len), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n));
+            }
+        }
+        let refd = u32::from_bytes(&c.read_one(h_refd).unwrap()).to_vec();
+        crate::refine::dense(&refd)
+    }
+
     /// moving::move_nodes with Apply::OrderFree and tol = 0, entirely on the device.
     fn move_nodes_dev<W: Weight>(&self, g: &Csr<W>, d: &DevGraph, comm: &mut [u32], gamma: f64, seed: u64, step: u64) -> (usize, usize) {
         let n = g.n();
@@ -831,12 +1269,14 @@ impl Backend for Gpu {
         let dev = W::as_f32(&g.weights).filter(|_| g.n() >= GPU_MIN_N).map(|w| {
             let off: Vec<u32> = g.offsets.iter().map(|&o| o as u32).collect();
             let kint: Vec<i64> = g.strength.iter().map(|&k| moving::to_fx(k)).collect();
+            let wint: Vec<i64> = w.iter().map(|&x| moving::to_fx(x as f64)).collect();
             DevGraph {
                 off: self.up(u32::as_bytes(&off)),
                 targets: self.up(u32::as_bytes(&g.targets)),
                 weights: self.up(f32::as_bytes(w)),
                 strength: self.up(f64::as_bytes(&g.strength)),
                 kint: self.up(i64::as_bytes(&kint)),
+                wint: self.up(i64::as_bytes(&wint)),
                 m: g.targets.len(),
             }
         });
@@ -858,7 +1298,11 @@ impl Backend for Gpu {
         }
     }
     fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize) {
-        Cpu.refine(&g.host, comm, gamma, theta, seed, step, apply)
+        match &g.dev {
+            // ponytail: rf_hubs sorts at most HUB_P edges; longer rows (none in kNN graphs) refine on the host
+            Some(d) if apply == Apply::OrderFree && g.host.offsets.windows(2).all(|o| o[1] - o[0] <= HUB_P) => self.refine_dev(d, g.host.n(), comm, gamma, theta, seed, step, g.host.total),
+            _ => Cpu.refine(&g.host, comm, gamma, theta, seed, step, apply),
+        }
     }
     fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64> {
         GpuGraph { host: Cpu.aggregate(&g.host, labels, n_labels, apply), dev: None }
