@@ -25,9 +25,9 @@ pub(crate) trait Backend: Sync {
     /// Colour, then local moving on `comm` (ids < n). Returns (colours, rounds).
     fn move_nodes<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &mut [u32], gamma: f64, tol: f64, seed: u64, step: u64, apply: Apply) -> (usize, usize);
     /// Refined labels (dense) and their count.
-    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize);
+    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize);
     /// The graph of `labels` (dense, `n_labels` of them).
-    fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize) -> Self::Graph<'static, f64>;
+    fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64>;
 }
 
 /// Today's rayon kernels.
@@ -52,10 +52,10 @@ impl Backend for Cpu {
         let groups = moving::colouring(g, seed, step);
         moving::move_nodes(g, comm, gamma, tol, &groups, apply)
     }
-    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {
-        refine::refine(g, comm, gamma, theta, seed, step)
+    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize) {
+        refine::refine(g, comm, gamma, theta, seed, step, apply)
     }
-    fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize) -> Self::Graph<'static, f64> {
-        Cow::Owned(aggregate::aggregate(g, labels, n_labels))
+    fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64> {
+        Cow::Owned(aggregate::aggregate(g, labels, n_labels, apply))
     }
 }

@@ -17,12 +17,21 @@
 
 use rayon::prelude::*;
 
+use std::cell::RefCell;
+
 use crate::graph::{Csr, Weight};
-use crate::rng;
+use crate::moving::{self, fx, to_fx};
+use crate::{rng, Apply};
 
 /// Refined labels (dense, ordered by first occurrence) and their count. Every refined cluster
-/// lies inside one community of `comm`.
-pub(crate) fn refine<W: Weight>(g: &Csr<W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {
+/// lies inside one community of `comm`. `Apply::OrderFree` refines synchronously over the level's
+/// colour groups (`refine_orderfree`), the GPU-reproducible variant.
+pub(crate) fn refine<W: Weight>(g: &Csr<W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize) {
+    if apply == Apply::OrderFree {
+        // the level's colouring is a pure function of (graph, seed, step): the same groups as
+        // local moving's
+        return refine_orderfree(g, comm, &moving::colouring(g, seed, step), gamma, theta, seed, step);
+    }
     let n = g.n();
     let scale = if g.total > 0.0 { gamma / g.total } else { 0.0 };
     let members = bucket(comm, n);
@@ -121,6 +130,131 @@ fn refine_one<W: Weight>(g: &Csr<W>, comm: &[u32], s: &[u32], pos: &[u32], scale
     refined
 }
 
+thread_local! {
+    // refine_orderfree's decide scratch: fixed-point weight to each refined cluster (zero between
+    // vertices), the clusters touched, candidates, cumulative probabilities
+    static OF_SCRATCH: RefCell<(Vec<i64>, Vec<u32>, Vec<(u32, f64)>, Vec<f64>)> = const { RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
+}
+
+/// Refinement for `Apply::OrderFree`: Algorithm 3's singleton merges, made synchronous so a GPU
+/// reproduces them bit for bit.
+///
+/// Vertices are visited once, colour group by colour group (the level's colouring: independent
+/// sets, also inside every community). In a group, every still-singleton, well-connected vertex
+/// decides in parallel against the state frozen at the group's start: its candidates are staying
+/// alone (gain 0) and the well-connected refined clusters of its community it touches with gain
+/// >= 0, in sorted cluster order, drawn as in `choose`. A proposal into C is then accepted if its
+/// gain stays >= 0 against C's frozen weight plus the earlier proposals of the group into C
+/// (group order), as in local moving's rule C. Weights, cluster weights and external weights are
+/// fixed-point integers (moving::FX), so every sum is order-free. Two proposals of a group are
+/// never adjacent, so external weights add exactly; every merge joins an adjacent cluster, so
+/// refined clusters stay connected inside their community.
+pub(crate) fn refine_orderfree<W: Weight>(g: &Csr<W>, comm: &[u32], groups: &[Vec<u32>], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {
+    let n = g.n();
+    let scale = if g.total > 0.0 { gamma / g.total } else { 0.0 };
+    let kint: Vec<i64> = g.strength.iter().map(|&k| to_fx(k)).collect();
+    let mut ks = vec![0i64; n]; // community weights (community ids < n)
+    for v in 0..n {
+        ks[comm[v] as usize] += kint[v];
+    }
+    let mut refd: Vec<u32> = (0..n as u32).collect(); // refined cluster of each vertex (founder id)
+    let mut cw = kint.clone(); // refined cluster weights
+    let mut size = vec![1u32; n];
+    // weight from each refined cluster to the rest of its community
+    let mut ext: Vec<i64> = (0..n)
+        .into_par_iter()
+        .map(|v| {
+            let (t, w) = g.row(v);
+            t.iter().zip(w).filter(|&(&u, _)| u as usize != v && comm[u as usize] == comm[v]).map(|(_, &w)| to_fx(w.into())).sum()
+        })
+        .collect();
+    let (mut inc, mut cw0, mut stamp) = (vec![0i64; n], vec![0i64; n], vec![0u32; n]);
+    let mut gid = 0u32;
+    for group in groups {
+        let (refd_f, cw_f, size_f, ext_f) = (&refd, &cw, &size, &ext);
+        let props: Vec<(u32, u32, i64, i64)> = group
+            .par_iter()
+            .with_min_len(64)
+            .filter_map(|&v| {
+                OF_SCRATCH.with(|sc| {
+                    let (wt, touched, cand, p) = &mut *sc.borrow_mut();
+                    if wt.len() < n {
+                        wt.resize(n, 0);
+                    }
+                    propose(g, comm, refd_f, cw_f, size_f, ext_f, &ks, scale, theta, seed, step, v, wt, touched, cand, p)
+                })
+            })
+            .collect();
+        gid += 1;
+        for &(v, c, wvc, extv) in &props {
+            let (vi, ci) = (v as usize, c as usize);
+            if stamp[ci] != gid {
+                (stamp[ci], inc[ci], cw0[ci]) = (gid, 0, cw[ci]);
+            }
+            let ok = fx(wvc) - scale * g.strength[vi] * fx(cw0[ci] + inc[ci]) >= 0.0;
+            inc[ci] += kint[vi];
+            if ok {
+                let own = refd[vi] as usize;
+                (cw[own], size[own], ext[own]) = (0, 0, 0);
+                refd[vi] = c;
+                cw[ci] += kint[vi];
+                size[ci] += 1;
+                ext[ci] += extv - 2 * wvc;
+            }
+        }
+    }
+    dense(&refd)
+}
+
+/// One vertex's refinement proposal against the frozen state: (v, target cluster, fixed-point
+/// weight from v to it, v's external weight), or None to stay.
+#[allow(clippy::too_many_arguments)]
+fn propose<W: Weight>(g: &Csr<W>, comm: &[u32], refd: &[u32], cw: &[i64], size: &[u32], ext: &[i64], ks: &[i64], scale: f64,
+                      theta: f64, seed: u64, step: u64, v: u32, wt: &mut [i64], touched: &mut Vec<u32>,
+                      cand: &mut Vec<(u32, f64)>, p: &mut Vec<f64>) -> Option<(u32, u32, i64, i64)> {
+    let vi = v as usize;
+    let own = refd[vi];
+    if size[own as usize] != 1 {
+        return None; // merged into: no longer a singleton
+    }
+    let (cs, k) = (comm[vi], g.strength[vi]);
+    let k_s = fx(ks[cs as usize]);
+    let ext_v = ext[own as usize];
+    if fx(ext_v) < scale * k * (k_s - k) {
+        return None; // not well-connected
+    }
+    let (t, w) = g.row(vi);
+    for (&u, &w) in t.iter().zip(w) {
+        if u != v && comm[u as usize] == cs {
+            let c = refd[u as usize];
+            if wt[c as usize] == 0 {
+                touched.push(c);
+            }
+            wt[c as usize] += to_fx(w.into());
+        }
+    }
+    touched.sort_unstable();
+    touched.dedup(); // a zero-weight edge can push a cluster twice
+    cand.clear();
+    cand.push((own, 0.0)); // staying alone: gain 0
+    for &c in touched.iter() {
+        let cwf = fx(cw[c as usize]);
+        if c != own && fx(ext[c as usize]) >= scale * cwf * (k_s - cwf) {
+            let gain = fx(wt[c as usize]) - scale * k * cwf;
+            if gain >= 0.0 {
+                cand.push((c, gain));
+            }
+        }
+    }
+    let chosen = choose(cand, theta, rng::key(seed, rng::REFINE_DRAW, step, v as u64), p);
+    let w_vc = if chosen == own { 0 } else { wt[chosen as usize] };
+    for &c in touched.iter() {
+        wt[c as usize] = 0;
+    }
+    touched.clear();
+    (chosen != own).then_some((v, chosen, w_vc, ext_v))
+}
+
 /// Draw from candidates (cluster, gain >= 0), the first being "stay". theta <= 0: the best gain
 /// (the first among equals). Otherwise proportional to exp((gain - max) / theta).
 fn choose(cand: &[(u32, f64)], theta: f64, key: u64, p: &mut Vec<f64>) -> u32 {
@@ -198,8 +332,8 @@ mod tests {
             }
             let g = Csr::from_parts(off, t, w);
             let comm: Vec<u32> = (0..n).map(|v| (r(1_000_000 + v as u64) * k as f64) as u32).collect();
-            for theta in [0.01, 0.0] {
-                let (refd, nr) = refine(&g, &comm, 1.0, theta, seed, 0);
+            for (theta, apply) in [(0.01, Apply::Sequential), (0.0, Apply::Sequential), (0.01, Apply::OrderFree), (0.0, Apply::OrderFree)] {
+                let (refd, nr) = refine(&g, &comm, 1.0, theta, seed, 0, apply);
                 assert!(nr <= n);
                 for c in bucket(&refd, nr) {
                     assert!(c.iter().all(|&v| comm[v as usize] == comm[c[0] as usize]), "seed {seed}: crosses communities");

@@ -174,7 +174,7 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
     if n_comm == b.n(cur) {
         return None; // every community is one node: nothing to aggregate
     }
-    let (mut agg, mut n_agg) = b.refine(cur, &dcomm, o.resolution, o.theta, o.seed, step);
+    let (mut agg, mut n_agg) = b.refine(cur, &dcomm, o.resolution, o.theta, o.seed, step, o.apply);
     let t2 = std::time::Instant::now();
     if n_agg == b.n(cur) {
         (agg, n_agg) = (dcomm.clone(), n_comm); // refinement merged nothing: aggregate the moved partition (igraph)
@@ -183,7 +183,7 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
     for v in 0..b.n(cur) {
         next_comm[agg[v] as usize] = dcomm[v]; // each refined cluster lies in one community
     }
-    let next = b.aggregate(cur, &agg, n_agg);
+    let next = b.aggregate(cur, &agg, n_agg, o.apply);
     if trace {
         eprintln!("it {it} level {level}   refined {n_agg} refine_s {:.4} aggregate_s {:.4}",
                   (t2 - t1).as_secs_f64(), t2.elapsed().as_secs_f64());

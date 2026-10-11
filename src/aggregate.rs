@@ -8,7 +8,9 @@ use std::cell::RefCell;
 use rayon::prelude::*;
 
 use crate::graph::{Csr, Weight};
+use crate::moving::{fx, to_fx};
 use crate::refine::bucket;
+use crate::Apply;
 
 const MIN_ROWS: usize = 64; // rows per rayon task; any value gives the same output
 
@@ -17,7 +19,13 @@ thread_local! {
     static SCRATCH: RefCell<(Vec<f64>, Vec<bool>, Vec<u32>)> = const { RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
 }
 
-pub(crate) fn aggregate<W: Weight>(g: &Csr<W>, labels: &[u32], n_labels: usize) -> Csr<f64> {
+/// The coarse graph of `labels`. `Apply::OrderFree` (the GPU reference): each coarse weight is a
+/// fixed-point integer sum (moving::FX) and each row lists its columns in sorted order, so a
+/// GPU builds the same graph with integer atomics and a per-row sort, in any order.
+pub(crate) fn aggregate<W: Weight>(g: &Csr<W>, labels: &[u32], n_labels: usize, apply: Apply) -> Csr<f64> {
+    if apply == Apply::OrderFree {
+        return aggregate_fx(g, labels, n_labels);
+    }
     let members = bucket(labels, n_labels);
     let rows: Vec<(Vec<u32>, Vec<f64>)> = members
         .par_iter()
@@ -41,6 +49,55 @@ pub(crate) fn aggregate<W: Weight>(g: &Csr<W>, labels: &[u32], n_labels: usize) 
                     }
                 }
                 let weights = touched.iter().map(|&d| std::mem::take(&mut wt[d as usize])).collect();
+                for &d in touched.iter() {
+                    seen[d as usize] = false;
+                }
+                (std::mem::take(touched), weights)
+            })
+        })
+        .collect();
+    let mut offsets = Vec::with_capacity(n_labels + 1);
+    offsets.push(0);
+    let m: usize = rows.iter().map(|r| r.0.len()).sum();
+    let (mut targets, mut weights) = (Vec::with_capacity(m), Vec::with_capacity(m));
+    for (t, w) in rows {
+        targets.extend_from_slice(&t);
+        weights.extend_from_slice(&w);
+        offsets.push(targets.len());
+    }
+    Csr::from_parts(offsets, targets, weights)
+}
+
+thread_local! {
+    // fixed-point weight to each coarse column; all zero between rows
+    static SCRATCH_FX: RefCell<(Vec<i64>, Vec<bool>, Vec<u32>)> = const { RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
+}
+
+fn aggregate_fx<W: Weight>(g: &Csr<W>, labels: &[u32], n_labels: usize) -> Csr<f64> {
+    let members = bucket(labels, n_labels);
+    let rows: Vec<(Vec<u32>, Vec<f64>)> = members
+        .par_iter()
+        .with_min_len(MIN_ROWS)
+        .map(|row| {
+            SCRATCH_FX.with(|s| {
+                let (wt, seen, touched) = &mut *s.borrow_mut();
+                if wt.len() < n_labels {
+                    wt.resize(n_labels, 0);
+                    seen.resize(n_labels, false);
+                }
+                for &u in row {
+                    let (t, w) = g.row(u as usize);
+                    for (&v, &w) in t.iter().zip(w) {
+                        let d = labels[v as usize] as usize;
+                        if !seen[d] {
+                            seen[d] = true;
+                            touched.push(d as u32);
+                        }
+                        wt[d] += to_fx(w.into());
+                    }
+                }
+                touched.sort_unstable();
+                let weights = touched.iter().map(|&d| fx(std::mem::take(&mut wt[d as usize]))).collect();
                 for &d in touched.iter() {
                     seen[d as usize] = false;
                 }

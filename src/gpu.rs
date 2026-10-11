@@ -857,11 +857,11 @@ impl Backend for Gpu {
             _ => Cpu.move_nodes(&g.host, comm, gamma, tol, seed, step, apply),
         }
     }
-    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {
-        Cpu.refine(&g.host, comm, gamma, theta, seed, step)
+    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize) {
+        Cpu.refine(&g.host, comm, gamma, theta, seed, step, apply)
     }
-    fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize) -> Self::Graph<'static, f64> {
-        GpuGraph { host: Cpu.aggregate(&g.host, labels, n_labels), dev: None }
+    fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64> {
+        GpuGraph { host: Cpu.aggregate(&g.host, labels, n_labels, apply), dev: None }
     }
 }
 

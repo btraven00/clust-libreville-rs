@@ -51,8 +51,9 @@ fn load(name: &str) -> Option<Graph> {
 }
 
 /// The hao2021 graphs (bench/graphs, git-ignored): every thread count, and the locked labels
-/// exactly. Sequential: phase 1 (4783e5d) and every output-preserving change since. OrderFree
-/// (rule C, 76547a9): differs from Sequential on 50k/100k seed 101 only.
+/// exactly. Sequential: phase 1 (4783e5d) and every output-preserving change since. OrderFree:
+/// rule C moving + fixed-point sorted-column aggregation + synchronous refinement (the GPU
+/// reference; NI vs Sequential and both converged references, PLAN.md).
 /// `cargo test --release -- --ignored`
 #[test]
 #[ignore]
@@ -61,9 +62,9 @@ fn hao2021_matches_lock_at_every_thread_count() {
         ("hao2021_10k", 100, Apply::Sequential, 0x87ded254a27d8377u64), ("hao2021_10k", 101, Apply::Sequential, 0x927306921a2dcc27),
         ("hao2021_50k", 100, Apply::Sequential, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, Apply::Sequential, 0x6cd3a3991e9d2160),
         ("hao2021_100k", 100, Apply::Sequential, 0x7ec81e3557da7095), ("hao2021_100k", 101, Apply::Sequential, 0x12c848f6a5f824ac),
-        ("hao2021_10k", 100, Apply::OrderFree, 0x87ded254a27d8377), ("hao2021_10k", 101, Apply::OrderFree, 0x927306921a2dcc27),
-        ("hao2021_50k", 100, Apply::OrderFree, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, Apply::OrderFree, 0x77b396f3ffb7f00f),
-        ("hao2021_100k", 100, Apply::OrderFree, 0x7ec81e3557da7095), ("hao2021_100k", 101, Apply::OrderFree, 0x30f4d82485c5536a),
+        ("hao2021_10k", 100, Apply::OrderFree, 0x8d7a414343580a2b), ("hao2021_10k", 101, Apply::OrderFree, 0x20f940b597024e5e),
+        ("hao2021_50k", 100, Apply::OrderFree, 0x2d93ed96feb7741b), ("hao2021_50k", 101, Apply::OrderFree, 0x64e2c1dc466c0b35),
+        ("hao2021_100k", 100, Apply::OrderFree, 0x880c906aa8088169), ("hao2021_100k", 101, Apply::OrderFree, 0x26bfb8b9d38a8315),
     ];
     for (name, seed, apply, want) in lock {
         let Some(g) = load(name) else { eprintln!("skip {name}: no graph"); continue };
