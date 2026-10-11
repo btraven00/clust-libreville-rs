@@ -31,6 +31,8 @@ const NONE: u32 = 0xFFFF_FFFF;
 /// Below this many vertices local moving stays on the CPU (launch overheads win).
 const GPU_MIN_N: usize = 50_000;
 const BLOCK: u32 = 128;
+/// Threads of the grid-stride per-group kernels (they loop over the group's affected list).
+const GRID_CAP: usize = 16_384;
 
 /// Sum of row v, in CSR order: one thread per row, so the order is fixed. (Smoke test.)
 #[cube(launch_unchecked)]
@@ -78,10 +80,12 @@ pub fn row_sums_gpu(g: &Graph) -> (Vec<f32>, f64, f64) {
 /// communities are listed for `decide_hubs`.
 #[cube(launch_unchecked)]
 fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
-          scale: f64, verts: &[u32], affected: &mut [u32], out_to: &mut [u32], out_wto: &mut [f64], out_wfrom: &mut [f64],
-          hubs: &mut [u32], hub_count: &[Atomic<u32>]) {
-    let i = ABSOLUTE_POS;
-    if i < verts.len() {
+          scale: f64, verts: &[u32], cur: &[u32], affected: &mut [u32], out_to: &mut [u32], out_wto: &mut [f64],
+          out_wfrom: &mut [f64], hubs: &mut [u32], hub_count: &[Atomic<u32>]) {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
         let v = verts[i] as usize;
         if affected[v] == 0 {
             out_to[i] = STAY;
@@ -156,6 +160,7 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], c
                 out_wfrom[i] = w_from;
             }
         }
+        i += stride;
     }
 }
 
@@ -332,12 +337,25 @@ fn decide_hubs(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f6
     }
 }
 
+/// Start a group: snapshot its affected count (what this group's kernels process) and reset it
+/// (later groups' marks append for the next round).
+#[cube(launch_unchecked)]
+fn begin(acount: &[Atomic<u32>], g: u32, cur: &mut [u32]) {
+    if ABSOLUTE_POS == 0 {
+        cur[0] = acount[g as usize].load();
+        acount[g as usize].store(0u32);
+    }
+}
+
 /// Each proposal's source and target community (a new one is n + v); reset their list heads.
 #[cube(launch_unchecked)]
-fn resolve(verts: &[u32], len: u32, n: u32, comm: &[u32], out_to: &[u32], res_from: &mut [u32], res_to: &mut [u32],
+fn resolve(verts: &[u32], cur: &[u32], n: u32, comm: &[u32], out_to: &[u32], res_from: &mut [u32], res_to: &mut [u32],
            heads_to: &[Atomic<u32>], heads_from: &[Atomic<u32>]) {
-    let i = ABSOLUTE_POS;
-    if i < len as usize && out_to[i] != STAY {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        if out_to[i] != STAY {
         let v = verts[i];
         let from = comm[v as usize];
         let mut to = out_to[i];
@@ -348,20 +366,27 @@ fn resolve(verts: &[u32], len: u32, n: u32, comm: &[u32], out_to: &[u32], res_fr
         res_to[i] = to;
         heads_to[to as usize].store(NONE);
         heads_from[from as usize].store(NONE);
+        }
+        i += stride;
     }
 }
 
 /// Link each proposal into its target's and its source's list (unordered; only the set matters).
 #[cube(launch_unchecked)]
-fn link(len: u32, out_to: &[u32], res_from: &[u32], res_to: &[u32], heads_to: &[Atomic<u32>], heads_from: &[Atomic<u32>],
+fn link(cur: &[u32], out_to: &[u32], res_from: &[u32], res_to: &[u32], heads_to: &[Atomic<u32>], heads_from: &[Atomic<u32>],
         next_to: &mut [u32], next_from: &mut [u32], hub_count: &[Atomic<u32>]) {
-    let i = ABSOLUTE_POS;
-    if i == 0 {
+    if ABSOLUTE_POS == 0 {
         hub_count[0].store(0u32); // decide_hubs of this group has run; ready for the next group
     }
-    if i < len as usize && out_to[i] != STAY {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        if out_to[i] != STAY {
         next_to[i] = heads_to[res_to[i] as usize].exchange(i as u32);
         next_from[i] = heads_from[res_from[i] as usize].exchange(i as u32);
+        }
+        i += stride;
     }
 }
 
@@ -369,19 +394,22 @@ fn link(len: u32, out_to: &[u32], res_from: &[u32], res_to: &[u32], heads_to: &[
 /// proposals (group positions < i) into the target and out of the source. Exactly
 /// moving::move_nodes' OrderFree branch.
 #[cube(launch_unchecked)]
-fn accept(verts: &[u32], len: u32, strength: &[f64], kint: &[i64], tot_int: &[i64], size: &[u32], scale: f64,
+fn accept(verts: &[u32], cur: &[u32], pos: &[u32], strength: &[f64], kint: &[i64], tot_int: &[i64], size: &[u32], scale: f64,
           out_to: &[u32], out_wto: &[f64], out_wfrom: &[f64], res_from: &[u32], res_to: &[u32],
           heads_to: &[Atomic<u32>], heads_from: &[Atomic<u32>], next_to: &[u32], next_from: &[u32], acc: &mut [u32]) {
-    let i = ABSOLUTE_POS;
-    if i < len as usize {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
         acc[i] = 0;
         if out_to[i] != STAY {
             let v = verts[i] as usize;
+            let pi = pos[v]; // "earlier" = earlier in the group's order (lists are unordered)
             let (from, to) = (res_from[i] as usize, res_to[i] as usize);
             let mut inc = i64::new(0);
             let mut j = heads_to[to].load();
             while j != NONE {
-                if (j as usize) < i {
+                if pos[verts[j as usize] as usize] < pi {
                     inc += kint[verts[j as usize] as usize];
                 }
                 j = next_to[j as usize];
@@ -390,7 +418,7 @@ fn accept(verts: &[u32], len: u32, strength: &[f64], kint: &[i64], tot_int: &[i6
             let mut outc = 0u32;
             let mut j = heads_from[from].load();
             while j != NONE {
-                if (j as usize) < i {
+                if pos[verts[j as usize] as usize] < pi {
                     outg += kint[verts[j as usize] as usize];
                     outc += 1;
                 }
@@ -409,15 +437,19 @@ fn accept(verts: &[u32], len: u32, strength: &[f64], kint: &[i64], tot_int: &[i6
                 acc[i] = 1;
             }
         }
+        i += stride;
     }
 }
 
 /// Apply the accepted moves: integer atomics on totals and sizes, new labels, a move count.
 #[cube(launch_unchecked)]
-fn apply(verts: &[u32], len: u32, kint: &[i64], acc: &[u32], res_from: &[u32], res_to: &[u32], tot_int: &[Atomic<i64>],
+fn apply(verts: &[u32], cur: &[u32], kint: &[i64], acc: &[u32], res_from: &[u32], res_to: &[u32], tot_int: &[Atomic<i64>],
          size: &[Atomic<u32>], comm: &mut [u32], moves: &[Atomic<u32>]) {
-    let i = ABSOLUTE_POS;
-    if i < len as usize && acc[i] == 1 {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        if acc[i] == 1 {
         let v = verts[i] as usize;
         let kv = kint[v];
         tot_int[res_from[i] as usize].fetch_sub(kv);
@@ -426,35 +458,54 @@ fn apply(verts: &[u32], len: u32, kint: &[i64], acc: &[u32], res_from: &[u32], r
         size[res_to[i] as usize].fetch_add(1u32);
         comm[v] = res_to[i];
         moves[0].fetch_add(1u32);
+        }
+        i += stride;
     }
 }
 
 /// The f64 view of the changed totals (what decide reads): tot = tot_int / FX.
 #[cube(launch_unchecked)]
-fn refresh(len: u32, acc: &[u32], res_from: &[u32], res_to: &[u32], tot_int: &[i64], tot: &mut [f64]) {
-    let i = ABSOLUTE_POS;
-    if i < len as usize && acc[i] == 1 {
+fn refresh(cur: &[u32], acc: &[u32], res_from: &[u32], res_to: &[u32], tot_int: &[i64], tot: &mut [f64]) {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        if acc[i] == 1 {
         let fxs = f64::new(16_777_216.0f32);
         let (f, t) = (res_from[i] as usize, res_to[i] as usize);
         tot[f] = f64::cast_from(tot_int[f]) / fxs;
         tot[t] = f64::cast_from(tot_int[t]) / fxs;
+        }
+        i += stride;
     }
 }
 
-/// Flag the neighbours of each moved vertex that are now in another community (all writes are
-/// 1, so their order doesn't matter).
+/// Flag the neighbours of each moved vertex that are now in another community, and list them in
+/// their group's affected list (list order is irrelevant: "earlier" uses group positions).
 #[cube(launch_unchecked)]
-fn mark(offsets: &[u32], targets: &[u32], comm: &[u32], verts: &[u32], len: u32, acc: &[u32], affected: &mut [u32]) {
-    let i = ABSOLUTE_POS;
-    if i < len as usize && acc[i] == 1 {
-        let v = verts[i] as usize;
-        let c = comm[v];
-        for e in offsets[v] as usize..offsets[v + 1] as usize {
-            let u = targets[e] as usize;
-            if comm[u] != c {
-                affected[u] = 1;
+fn mark(offsets: &[u32], targets: &[u32], comm: &[u32], alist: &mut [u32], goff: u32, cur: &[u32], acc: &[u32],
+        affected: &[Atomic<u32>], group_of: &[u32], goffs: &[u32], acount: &[Atomic<u32>]) {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        if acc[i] == 1 {
+            let v = alist[goff as usize + i] as usize;
+            let c = comm[v];
+            for e in offsets[v] as usize..offsets[v + 1] as usize {
+                let u = targets[e] as usize;
+                if comm[u] != c {
+                    // first to flag u appends it to its group's list (never this group's: a
+                    // colour group is independent), so each vertex is listed at most once
+                    if affected[u].exchange(1u32) == 0 {
+                        let gu = group_of[u] as usize;
+                        let slot = acount[gu].fetch_add(1u32);
+                        alist[(goffs[gu] + slot) as usize] = u as u32;
+                    }
+                }
             }
         }
+        i += stride;
     }
 }
 
@@ -516,7 +567,24 @@ impl Gpu {
         let (h_comm, h_tot_int, h_tot, h_size) = (self.up(u32::as_bytes(comm)), self.up(i64::as_bytes(&tot_int)), self.up(f64::as_bytes(&tot)), self.up(u32::as_bytes(&size)));
         let h_aff = self.up(u32::as_bytes(&vec![1u32; n]));
         let (h_heads_to, h_heads_from) = (c.empty(ids * 4), c.empty(ids * 4));
-        let h_groups: Vec<Handle> = groups.iter().map(|grp| self.up(u32::as_bytes(grp))).collect();
+        // affected lists: one region per colour group (offset goffs[g], capacity = group size),
+        // initially the whole group; group_of / pos give each vertex's group and position in it
+        let mut goffs = Vec::with_capacity(groups.len() + 1);
+        let (mut group_of, mut pos) = (vec![0u32; n], vec![0u32; n]);
+        let mut alist: Vec<u32> = Vec::with_capacity(n);
+        for (gi, grp) in groups.iter().enumerate() {
+            goffs.push(alist.len() as u32);
+            for (p, &v) in grp.iter().enumerate() {
+                (group_of[v as usize], pos[v as usize]) = (gi as u32, p as u32);
+            }
+            alist.extend_from_slice(grp);
+        }
+        goffs.push(alist.len() as u32);
+        let acount: Vec<u32> = groups.iter().map(|g| g.len() as u32).collect();
+        let (h_alist, h_goffs, h_acount) = (self.up(u32::as_bytes(&alist)), self.up(u32::as_bytes(&goffs)), self.up(u32::as_bytes(&acount)));
+        let (h_group_of, h_pos) = (self.up(u32::as_bytes(&group_of)), self.up(u32::as_bytes(&pos)));
+        let h_cur = c.empty(4);
+        let ng = groups.len();
         let mg = groups.iter().map(|g| g.len()).max().unwrap_or(1).max(1);
         let (o_to, o_wto, o_wfrom) = (c.empty(mg * 4), c.empty(mg * 8), c.empty(mg * 8));
         let (r_from, r_to, n_to, n_from, h_acc) = (c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4));
@@ -526,32 +594,35 @@ impl Gpu {
         for _ in 0..1000 {
             rounds += 1;
             let h_moves = self.up(u32::as_bytes(&zero));
-            for (grp, h_grp) in groups.iter().zip(&h_groups) {
+            for (gi, grp) in groups.iter().enumerate() {
                 let len = grp.len();
-                let (cc, cd) = Self::grid(len);
-                let l = len as u32;
+                // grid-stride kernels over the group's affected list: a capped grid
+                let (cc, cd) = Self::grid(len.min(GRID_CAP));
+                let goff = goffs[gi];
+                let verts = h_alist.clone().offset_start(goff as u64 * 4);
                 unsafe {
+                    begin::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_acount, ng), gi as u32, arg(&h_cur, 1));
                     decide::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
-                        arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale, arg(h_grp, len), arg(&h_aff, n),
-                        arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1));
+                        arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale, arg(&verts, len), arg(&h_cur, 1),
+                        arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1));
                     decide_hubs::launch_unchecked(c, CubeCount::Static(HUB_CUBES, 1, 1), CubeDim::new_1d(BLOCK), arg(&d.off, n + 1),
                         arg(&d.targets, d.m), arg(&d.weights, d.m), arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids),
-                        arg(&h_size, ids), scale, arg(h_grp, len), arg(&h_hubs, len), arg(&h_hub_count, 1), arg(&o_to, len),
+                        arg(&h_size, ids), scale, arg(&verts, len), arg(&h_hubs, len), arg(&h_hub_count, 1), arg(&o_to, len),
                         arg(&o_wto, len), arg(&o_wfrom, len));
-                    resolve::launch_unchecked(c, cc.clone(), cd.clone(), arg(h_grp, len), l, n as u32, arg(&h_comm, n), arg(&o_to, len),
-                        arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids));
-                    link::launch_unchecked(c, cc.clone(), cd.clone(), l, arg(&o_to, len), arg(&r_from, len), arg(&r_to, len),
+                    resolve::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), n as u32, arg(&h_comm, n),
+                        arg(&o_to, len), arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids));
+                    link::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&o_to, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len), arg(&n_from, len), arg(&h_hub_count, 1));
-                    accept::launch_unchecked(c, cc.clone(), cd.clone(), arg(h_grp, len), l, arg(&d.strength, n), arg(&d.kint, n),
-                        arg(&h_tot_int, ids), arg(&h_size, ids), scale, arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len),
+                    accept::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&h_pos, n), arg(&d.strength, n),
+                        arg(&d.kint, n), arg(&h_tot_int, ids), arg(&h_size, ids), scale, arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len),
                         arg(&n_from, len), arg(&h_acc, len));
-                    apply::launch_unchecked(c, cc.clone(), cd.clone(), arg(h_grp, len), l, arg(&d.kint, n), arg(&h_acc, len),
+                    apply::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&d.kint, n), arg(&h_acc, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_tot_int, ids), arg(&h_size, ids), arg(&h_comm, n), arg(&h_moves, 1));
-                    refresh::launch_unchecked(c, cc.clone(), cd.clone(), l, arg(&h_acc, len), arg(&r_from, len), arg(&r_to, len),
+                    refresh::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&h_acc, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_tot_int, ids), arg(&h_tot, ids));
-                    mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(h_grp, len), l,
-                        arg(&h_acc, len), arg(&h_aff, n));
+                    mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
+                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng));
                 }
             }
             let moved = u32::from_bytes(&c.read_one(h_moves).unwrap())[0];
@@ -631,11 +702,12 @@ pub fn check_decide(g: &Graph, comm: &[u32], gamma: f64) -> (usize, usize, usize
     let (h_off, h_t, h_w, h_s) = (h(u32::as_bytes(&off)), h(u32::as_bytes(&c.targets)), h(f32::as_bytes(&c.weights)), h(f64::as_bytes(&c.strength)));
     let (h_c, h_tot, h_size, h_v, h_aff) = (h(u32::as_bytes(comm)), h(f64::as_bytes(&tot)), h(u32::as_bytes(&size)), h(u32::as_bytes(&verts)), h(u32::as_bytes(&vec![1u32; n])));
     let (o_to, o_wto, o_wfrom, h_hubs, h_cnt) = (cl.empty(n * 4), cl.empty(n * 8), cl.empty(n * 8), cl.empty(n * 4), h(u32::as_bytes(&[0u32])));
+    let h_cur = h(u32::as_bytes(&[n as u32]));
     let m = c.targets.len();
     let (cc, cd) = Gpu::grid(n);
     unsafe {
         decide::launch_unchecked(cl, cc, cd, arg(&h_off, n + 1), arg(&h_t, m), arg(&h_w, m), arg(&h_s, n), arg(&h_c, n), arg(&h_tot, ids),
-            arg(&h_size, ids), scale, arg(&h_v, n), arg(&h_aff, n), arg(&o_to, n), arg(&o_wto, n), arg(&o_wfrom, n), arg(&h_hubs, n), arg(&h_cnt, 1));
+            arg(&h_size, ids), scale, arg(&h_v, n), arg(&h_cur, 1), arg(&h_aff, n), arg(&o_to, n), arg(&o_wto, n), arg(&o_wfrom, n), arg(&h_hubs, n), arg(&h_cnt, 1));
         decide_hubs::launch_unchecked(cl, CubeCount::Static(HUB_CUBES, 1, 1), CubeDim::new_1d(BLOCK), arg(&h_off, n + 1), arg(&h_t, m),
             arg(&h_w, m), arg(&h_s, n), arg(&h_c, n), arg(&h_tot, ids), arg(&h_size, ids), scale, arg(&h_v, n), arg(&h_hubs, n), arg(&h_cnt, 1),
             arg(&o_to, n), arg(&o_wto, n), arg(&o_wfrom, n));
