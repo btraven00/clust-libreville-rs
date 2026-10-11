@@ -53,6 +53,14 @@ pub struct Options {
     pub apply: Apply,
     /// Worker threads; None: `RAYON_NUM_THREADS`, else `std::thread::available_parallelism()`
     /// (which respects cgroup quotas). The labels do not depend on it.
+    ///
+    /// Ensembles in shared memory (many runs over one graph, e.g. Markov stability scans of
+    /// scales × seeds): run each call on its own OS thread with `threads: Some(1)` (or a small
+    /// count) instead of nesting calls inside a rayon pool. Every calling thread keeps its own
+    /// pool, built on its first call and reused afterwards, so repeated calls cost no thread spawns
+    /// and the ensemble uses exactly (callers × threads) workers. Calls from inside a rayon pool
+    /// also work, but a caller blocked on its own pool may pick up other ensemble jobs: the
+    /// thread count is not respected and memory grows with the number of runs in flight.
     pub threads: Option<usize>,
 }
 
@@ -96,7 +104,20 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
         std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
     });
-    rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("thread pool").install(f)
+    thread_local! {
+        // this thread's pools by size; ponytail: never freed (one per size a thread asks for)
+        static POOLS: std::cell::RefCell<Vec<(usize, std::rc::Rc<rayon::ThreadPool>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let pool = POOLS.with(|p| {
+        let mut p = p.borrow_mut();
+        if let Some((_, pool)) = p.iter().find(|(t, _)| *t == threads) {
+            return pool.clone();
+        }
+        let pool = std::rc::Rc::new(rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("thread pool"));
+        p.push((threads, pool.clone()));
+        pool
+    });
+    pool.install(f)
 }
 
 fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
