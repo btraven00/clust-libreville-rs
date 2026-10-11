@@ -4,18 +4,19 @@
 
 use extendr_api::prelude::*;
 
-fn graph(p: &[i32], i: &[i32], x: &[f64]) -> dl::Graph {
+fn graph(p: &[i32], i: &[i32], x: &[f64], check_symmetry: bool) -> dl::Graph {
     let indptr: Vec<usize> = p.iter().map(|&v| v as usize).collect();
     let indices: Vec<u32> = i.iter().map(|&v| v as u32).collect();
-    dl::Graph::from_csr(&indptr, &indices, x).unwrap_or_else(|e| throw_r_error(format!("invalid graph: {e}")))
+    let build = if check_symmetry { dl::Graph::from_csr } else { dl::Graph::from_csr_trusted };
+    build(&indptr, &indices, x).unwrap_or_else(|e| throw_r_error(format!("invalid graph: {e}")))
 }
 
 /// @keywords internal
 #[extendr]
 #[allow(clippy::too_many_arguments)]
 fn leiden_rs(p: &[i32], i: &[i32], x: &[f64], resolution: f64, seed: f64, n_iterations: i32, theta: f64, min_gain: f64,
-             threads: i32) -> Vec<i32> {
-    let g = graph(p, i, x);
+             threads: i32, check_symmetry: bool) -> Vec<i32> {
+    let g = graph(p, i, x, check_symmetry);
     let o = dl::Options {
         resolution,
         seed: seed as u64,
@@ -32,7 +33,7 @@ fn leiden_rs(p: &[i32], i: &[i32], x: &[f64], resolution: f64, seed: f64, n_iter
 #[extendr]
 fn modularity_rs(p: &[i32], i: &[i32], x: &[f64], membership: &[i32], resolution: f64) -> f64 {
     let labels: Vec<u32> = membership.iter().map(|&l| l as u32).collect();
-    dl::modularity(&graph(p, i, x), &labels, resolution)
+    dl::modularity(&graph(p, i, x, true), &labels, resolution)
 }
 
 extendr_module! {

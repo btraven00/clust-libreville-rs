@@ -75,3 +75,13 @@ test_that("invalid input is an error", {
     expect_error(leiden(two_cliques(), seed = -1))
     expect_error(leiden(two_cliques(), threads = 0))
 })
+
+test_that("check_symmetry = FALSE skips only the symmetry check", {
+    m <- planted()
+    expect_identical(leiden(m, seed = 6, check_symmetry = FALSE),
+                     leiden(m, seed = 6))
+    a <- two_cliques()
+    a[1, 2] <- 2 # asymmetric: meaningless labels, but no error
+    expect_length(leiden(a, check_symmetry = FALSE), 10)
+    expect_error(leiden(a), "symmetric")
+})

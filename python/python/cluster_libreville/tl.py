@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def leiden(adata, resolution: float = 1.0, *, random_state: int = 0, key_added: str = "leiden", adjacency=None,
            neighbors_key: str | None = None, obsp: str | None = None, n_iterations: int = -1, theta: float = 0.01,
-           min_gain: float = 0.0, threads: int | None = None, copy: bool = False):
+           min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True, copy: bool = False):
     """Cluster cells with deterministic Leiden, like ``sc.tl.leiden``.
 
     The graph is ``adjacency``, else ``adata.obsp[obsp]``, else the connectivities of
@@ -29,7 +29,7 @@ def leiden(adata, resolution: float = 1.0, *, random_state: int = 0, key_added: 
             obsp = adata.uns[key].get("connectivities_key", "connectivities")
         adjacency = adata.obsp[obsp]
     labels = _leiden(adjacency, resolution=resolution, seed=random_state, n_iterations=n_iterations, theta=theta,
-                     min_gain=min_gain, threads=threads)
+                     min_gain=min_gain, threads=threads, check_symmetry=check_symmetry)
     k = int(labels.max()) + 1 if len(labels) else 0
     adata.obs[key_added] = pd.Categorical.from_codes(labels, categories=[str(c) for c in range(k)])
     adata.uns[key_added] = {"params": {"resolution": resolution, "random_state": random_state,

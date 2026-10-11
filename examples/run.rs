@@ -1,4 +1,4 @@
-//! cargo run --release --example run -- GRAPH.npz [--seed S] [--resolution R] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--apply sequential|orderfree] [--repeat R] [--gpu] [--out LABELS.npy]
+//! cargo run --release --example run -- GRAPH.npz [--seed S] [--resolution R] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--apply sequential|orderfree] [--repeat R] [--gpu] [--trusted] [--out LABELS.npy]
 //! GRAPH.npz: full symmetric CSR (indptr, indices, data), as bench/py/export_graph.py writes it.
 //! Prints one line: n, time_s (fastest leiden() call, the "algo only" time), median_s and times (every call, in order),
 //! build_s (Graph::from_csr), clusters, modularity. LABELS.npy: int64, graph row order.
@@ -29,7 +29,9 @@ fn main() {
     let p = z.by_name("data").unwrap().expect("no 'data'");
     let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
     let t = Instant::now();
-    let g = Graph::from_csr(&indptr, &indices, &data).expect("valid graph");
+    // --trusted: skip the symmetry check (inputs symmetric by construction)
+    let build = if args.iter().any(|a| a == "--trusted") { Graph::from_csr_trusted } else { Graph::from_csr };
+    let g = build(&indptr, &indices, &data).expect("valid graph");
     let build_s = t.elapsed().as_secs_f64();
 
     // --repeat R: R calls in this process; fastest, median and all of them (no call is discarded as warm-up)

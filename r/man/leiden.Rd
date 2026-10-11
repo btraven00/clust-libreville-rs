@@ -11,7 +11,8 @@ leiden(
   n_iterations = -1L,
   theta = 0.01,
   min_gain = 0,
-  threads = NULL
+  threads = NULL,
+  check_symmetry = TRUE
 )
 }
 \arguments{
@@ -35,6 +36,10 @@ less modularity than this (0: strict).}
 
 \item{threads}{Worker threads; \code{NULL}: all cores. Does not change the
 result.}
+
+\item{check_symmetry}{Verify that the matrix is symmetric. \code{FALSE} skips
+only that check, for graphs symmetric by construction (Seurat, scanpy,
+bluster); bounds and weights are always validated.}
 }
 \value{
 Integer community labels \verb{1..k}, community 1 the largest (ties: by

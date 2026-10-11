@@ -31,6 +31,9 @@
 #'   less modularity than this (0: strict).
 #' @param threads Worker threads; `NULL`: all cores. Does not change the
 #'   result.
+#' @param check_symmetry Verify that the matrix is symmetric. `FALSE` skips
+#'   only that check, for graphs symmetric by construction (Seurat, scanpy,
+#'   bluster); bounds and weights are always validated.
 #' @return Integer community labels `1..k`, community 1 the largest (ties: by
 #'   smallest vertex), named by the graph's row names if it has them.
 #' @seealso [cluster_libreville()] for igraph and bluster.
@@ -41,14 +44,16 @@
 #' table(labels)
 #' @export
 leiden <- function(graph, resolution = 1, seed = 0, n_iterations = -1L,
-                    theta = 0.01, min_gain = 0, threads = NULL) {
+                    theta = 0.01, min_gain = 0, threads = NULL,
+                   check_symmetry = TRUE) {
     m <- .as_graph(graph)
     stopifnot(seed >= 0, seed < 2^53, seed == floor(seed),
                 is.null(threads) || threads >= 1)
     r <- leiden_rs(m@p, m@i, m@x, as.double(resolution), as.double(seed),
                     as.integer(n_iterations), as.double(theta),
                     as.double(min_gain),
-                    if (is.null(threads)) 0L else as.integer(threads))
+                    if (is.null(threads)) 0L else as.integer(threads),
+                    isTRUE(check_symmetry))
     if (!is.null(rownames(m))) names(r) <- rownames(m)
     r
 }

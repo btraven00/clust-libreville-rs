@@ -150,3 +150,14 @@ def test_scanpy_style():
     assert a.uns["leiden"]["params"]["flavor"] == "cluster-libreville"
     b = cl.tl.leiden(a, obsp="connectivities", key_added="cl", copy=True)
     assert "cl" in b.obs and "cl" not in a.obs
+
+
+def test_check_symmetry_off():
+    g, _ = planted()
+    assert np.array_equal(cl.leiden(g, seed=6, check_symmetry=False), cl.leiden(g, seed=6))
+    bad = g.tolil()
+    bad[0, 1] = 7.0
+    labels = cl.leiden(bad.tocsr(), check_symmetry=False)  # meaningless, but no error or crash
+    assert len(labels) == g.shape[0]
+    with pytest.raises(ValueError, match="out of range"):  # bounds are always checked
+        cl.leiden((np.array([0, 1]), np.array([5], dtype=np.int32), np.array([1.0])), check_symmetry=False)

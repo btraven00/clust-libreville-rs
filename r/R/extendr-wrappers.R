@@ -6,7 +6,7 @@
 NULL
 
 #' @keywords internal
-leiden_rs <- function(p, i, x, resolution, seed, n_iterations, theta, min_gain, threads) .Call(wrap__leiden_rs, p, i, x, resolution, seed, n_iterations, theta, min_gain, threads)
+leiden_rs <- function(p, i, x, resolution, seed, n_iterations, theta, min_gain, threads, check_symmetry) .Call(wrap__leiden_rs, p, i, x, resolution, seed, n_iterations, theta, min_gain, threads, check_symmetry)
 
 #' @keywords internal
 modularity_rs <- function(p, i, x, membership, resolution) .Call(wrap__modularity_rs, p, i, x, membership, resolution)

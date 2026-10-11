@@ -35,7 +35,7 @@ def _csr(graph):
 
 
 def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int = -1, theta: float = 0.01,
-           min_gain: float = 0.0, threads: int | None = None) -> np.ndarray:
+           min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True) -> np.ndarray:
     """Leiden communities of an undirected weighted graph, maximising modularity.
 
     Parameters
@@ -55,6 +55,10 @@ def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int =
         With ``n_iterations=-1``, also stop once an iteration gains less modularity than this.
     threads
         Worker threads; None: all cores (or ``RAYON_NUM_THREADS``). Does not change the result.
+    check_symmetry
+        Verify that the matrix is symmetric (O(m)). False skips only that check, for graphs
+        symmetric by construction (scanpy's connectivities); bounds and weights are always
+        validated, and an asymmetric graph then gives meaningless labels, never a crash.
 
     Returns
     -------
@@ -63,7 +67,7 @@ def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int =
     if threads is not None and threads < 1:
         raise ValueError("threads must be >= 1 or None")
     return leiden_csr(*_csr(graph), float(resolution), int(seed), int(n_iterations), float(theta), float(min_gain),
-                      threads)
+                      threads, bool(check_symmetry))
 
 
 def edges_to_csr(src, dst, weight=None, n: int | None = None):
