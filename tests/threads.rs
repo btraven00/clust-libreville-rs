@@ -1,6 +1,6 @@
 //! Phase 2's gate: nothing, not even a last bit of a coarse weight, depends on the thread count.
 
-use detleiden::{leiden_traced, Apply, Graph, Options};
+use clust_libreville_rs::{leiden_traced, Apply, Graph, Options};
 
 mod common;
 use common::{graph, planted};

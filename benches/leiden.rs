@@ -3,7 +3,7 @@
 //! if absent). Hold the CPU lock: `flock bench/.cpu.lock cargo bench ...`.
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use detleiden::{leiden, Graph, Options};
+use clust_libreville_rs::{leiden, Graph, Options};
 
 fn load(name: &str) -> Option<Graph> {
     let path = format!("{}/bench/graphs/{name}.npz", env!("CARGO_MANIFEST_DIR"));

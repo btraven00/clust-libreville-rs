@@ -17,10 +17,10 @@ fn main() {
     let indices: Vec<u32> = ints("indices").into_iter().map(|x| x as u32).collect();
     let p = z.by_name("data").unwrap().unwrap();
     let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
-    let g = detleiden::Graph::from_csr(&indptr, &indices, &data).unwrap();
+    let g = clust_libreville_rs::Graph::from_csr(&indptr, &indices, &data).unwrap();
     for call in 1..=3 {
         let t = std::time::Instant::now();
-        let (s, up, k) = detleiden::gpu::row_sums_gpu(&g);
+        let (s, up, k) = clust_libreville_rs::gpu::row_sums_gpu(&g);
         let total = t.elapsed().as_secs_f64();
         let cpu: Vec<f64> = (0..g.n()).map(|v| data[indptr[v]..indptr[v + 1]].iter().sum()).collect();
         let err = s.iter().zip(&cpu).map(|(&a, &b)| (a as f64 - b).abs() / b.max(1e-12)).fold(0.0, f64::max);

@@ -1,4 +1,4 @@
-//! detleiden: seeded, deterministic Leiden community detection (modularity, resolution γ).
+//! clust-libreville-rs: seeded, deterministic Leiden community detection (modularity, resolution γ).
 //!
 //! Same graph, same options, same seed: the same labels. Every random choice is a pure function
 //! of (seed, step, vertex) and every floating-point sum runs in a fixed order, so the result

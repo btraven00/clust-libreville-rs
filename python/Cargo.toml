@@ -11,7 +11,7 @@ name = "_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-detleiden = { path = ".." }
+clust-libreville-rs = { path = ".." }
 numpy = "0.29"
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 

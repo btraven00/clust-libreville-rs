@@ -1,4 +1,4 @@
-use detleiden::Graph;
+use clust_libreville_rs::Graph;
 
 #[allow(dead_code)]
 pub fn graph(n: usize, edges: &[(usize, usize, f64)]) -> Graph {

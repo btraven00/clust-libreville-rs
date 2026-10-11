@@ -3,7 +3,7 @@
 //! Prints one line: n, time_s (fastest leiden() call, the "algo only" time), median_s and times (every call, in order),
 //! build_s (Graph::from_csr), clusters, modularity. LABELS.npy: int64, graph row order.
 
-use detleiden::{leiden, modularity, Graph, Options};
+use clust_libreville_rs::{leiden, modularity, Graph, Options};
 use std::time::Instant;
 
 fn main() {
@@ -17,7 +17,7 @@ fn main() {
     if let Some(s) = flag("--threads") { o.threads = Some(s.parse().unwrap()); }
     if let Some(s) = flag("--tol") { o.tolerance = s.parse().unwrap(); }
     if let Some(s) = flag("--min-gain") { o.min_gain = s.parse().unwrap(); }
-    if flag("--apply").as_deref() == Some("orderfree") { o.apply = detleiden::Apply::OrderFree; }
+    if flag("--apply").as_deref() == Some("orderfree") { o.apply = clust_libreville_rs::Apply::OrderFree; }
 
     let mut z = npyz::npz::NpzArchive::open(&args[0]).expect("open npz");
     let mut ints = |name: &str| -> Vec<i64> {
@@ -55,10 +55,10 @@ fn main() {
 }
 
 #[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
-fn gpu_leiden(g: &Graph, o: &detleiden::Options) -> Vec<u32> {
-    detleiden::leiden_gpu(g, o)
+fn gpu_leiden(g: &Graph, o: &clust_libreville_rs::Options) -> Vec<u32> {
+    clust_libreville_rs::leiden_gpu(g, o)
 }
 #[cfg(not(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal")))]
-fn gpu_leiden(_: &Graph, _: &detleiden::Options) -> Vec<u32> {
+fn gpu_leiden(_: &Graph, _: &clust_libreville_rs::Options) -> Vec<u32> {
     panic!("--gpu needs a build with --features gpu-cuda, gpu-metal or gpu-wgpu")
 }

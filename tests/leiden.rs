@@ -1,4 +1,4 @@
-use detleiden::{leiden, modularity, Graph, Options};
+use clust_libreville_rs::{leiden, modularity, Graph, Options};
 
 mod common;
 use common::{graph, planted};

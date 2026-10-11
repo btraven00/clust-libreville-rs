@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "clust-libreville-rs"
+version = "0.0.1"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -28,17 +35,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
-name = "detleiden"
-version = "0.0.1"
-dependencies = [
- "rayon",
-]
-
-[[package]]
 name = "detleidenr"
 version = "0.1.0"
 dependencies = [
- "detleiden",
+ "clust-libreville-rs",
  "extendr-api",
 ]
 

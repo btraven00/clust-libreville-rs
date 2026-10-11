@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use detleiden::{leiden, Graph, Options};
+use clust_libreville_rs::{leiden, Graph, Options};
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 

@@ -615,6 +615,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "clust-libreville-rs"
+version = "0.0.1"
+dependencies = [
+ "criterion",
+ "cubecl",
+ "npyz",
+ "rayon",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1415,16 +1425,6 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-xid",
-]
-
-[[package]]
-name = "detleiden"
-version = "0.0.1"
-dependencies = [
- "criterion",
- "cubecl",
- "npyz",
- "rayon",
 ]
 
 [[package]]

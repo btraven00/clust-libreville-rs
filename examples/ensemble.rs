@@ -14,15 +14,15 @@ fn main() {
     let indices: Vec<u32> = ints("indices").into_iter().map(|x| x as u32).collect();
     let p = z.by_name("data").unwrap().unwrap();
     let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
-    let g = detleiden::Graph::from_csr(&indptr, &indices, &data).unwrap();
+    let g = clust_libreville_rs::Graph::from_csr(&indptr, &indices, &data).unwrap();
     let t = std::time::Instant::now();
     std::thread::scope(|s| {
         for w in 0..workers {
             let g = &g;
             s.spawn(move || {
                 for r in 0..runs {
-                    let o = detleiden::Options { seed: (w * runs + r) as u64, resolution: 0.5 + r as f64 / runs as f64, threads: Some(1), ..Default::default() };
-                    std::hint::black_box(detleiden::leiden(g, &o));
+                    let o = clust_libreville_rs::Options { seed: (w * runs + r) as u64, resolution: 0.5 + r as f64 / runs as f64, threads: Some(1), ..Default::default() };
+                    std::hint::black_box(clust_libreville_rs::leiden(g, &o));
                 }
             });
         }

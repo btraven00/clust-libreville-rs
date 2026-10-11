@@ -17,8 +17,8 @@ fn main() {
     let indices: Vec<u32> = ints("indices").into_iter().map(|x| x as u32).collect();
     let p = z.by_name("data").unwrap().unwrap();
     let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
-    let g = detleiden::Graph::from_csr(&indptr, &indices, &data).unwrap();
+    let g = clust_libreville_rs::Graph::from_csr(&indptr, &indices, &data).unwrap();
     let singletons: Vec<u32> = (0..g.n() as u32).collect();
-    let (n, hubs, mism) = detleiden::gpu::check_decide(&g, &singletons, 1.0);
+    let (n, hubs, mism) = clust_libreville_rs::gpu::check_decide(&g, &singletons, 1.0);
     println!("singletons: n {n}, hubs {hubs}, mismatches {mism}");
 }
