@@ -31,6 +31,11 @@ const NONE: u32 = 0xFFFF_FFFF;
 /// Below this many vertices local moving stays on the CPU (launch overheads win).
 const AG_MAX_ROW: usize = 8192; // ponytail: rank sort is O(k^2) per row; segmented sort if coarse rows grow
 const GPU_MIN_N: usize = 50_000;
+/// Coarse levels stay on the device from this size. Smaller ones are faster on the host: on
+/// syn_1M (2026-10-11) level 1 (167k, avg degree 29) moved in 0.48 s on the GPU vs 0.20 s on the
+/// CPU, level 2 (56k, degree 58) 0.40 vs 0.08 s: denser rows, more colours, more launches.
+/// Labels are identical either way (checked with 50_000).
+const GPU_COARSE_MIN_N: usize = 500_000;
 const BLOCK: u32 = 128;
 /// Threads of the grid-stride per-group kernels (they loop over the group's affected list).
 const GRID_CAP: usize = 16_384;
@@ -82,7 +87,7 @@ pub fn row_sums_gpu(g: &Graph) -> (Vec<f32>, f64, f64) {
 /// same candidate order and strict `>`). Vertices with more than MAXC distinct neighbour
 /// communities are listed for `decide_hubs`.
 #[cube(launch_unchecked)]
-fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
+fn decide(offsets: &[u32], targets: &[u32], weights: &[f64], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
           scale: f64, verts: &[u32], cur: &[u32], affected: &mut [u32], out_to: &mut [u32], out_wto: &mut [f64],
           out_wfrom: &mut [f64], hubs: &mut [u32], hub_count: &[Atomic<u32>]) {
     let count = cur[0] as usize;
@@ -174,7 +179,7 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], c
 /// strictly best gain in first-occurrence order = the maximum gain, ties to the earliest first
 /// occurrence. Rows longer than HUB_P (none in our graphs) fall back to an O(degree^2) rescan.
 #[cube(launch_unchecked)]
-fn decide_hubs(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
+fn decide_hubs(offsets: &[u32], targets: &[u32], weights: &[f64], strength: &[f64], comm: &[u32], tot: &[f64], size: &[u32],
                scale: f64, verts: &[u32], hubs: &[u32], hub_count: &[Atomic<u32>], out_to: &mut [u32], out_wto: &mut [f64],
                out_wfrom: &mut [f64]) {
     let mut keys = Shared::<[u64]>::new_slice(HUB_P);
@@ -1087,6 +1092,28 @@ fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap
     }
 }
 
+/// f64 copies of f32 weights (exact), so f32 inputs upload half the bytes.
+#[cube(launch_unchecked)]
+fn widen(src: &[f32], dst: &mut [f64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < src.len() {
+        dst[s] = f64::cast_from(src[s]);
+        s += stride;
+    }
+}
+
+/// Coarse weights fx(sum) (moving::fx).
+#[cube(launch_unchecked)]
+fn ag_weights(ws: &[i64], dst: &mut [f64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < ws.len() {
+        dst[s] = fxv(ws[s]);
+        s += stride;
+    }
+}
+
 #[cube(launch_unchecked)]
 fn ag_clear(keys: &mut [u32], vals: &mut [i64]) {
     let stride = CUBE_COUNT * CUBE_DIM as usize;
@@ -1181,6 +1208,11 @@ impl Gpu {
         Gpu { client: cubecl::Device::default().client() }
     }
 
+    fn dev_graph(&self, strength: &[f64], off: Handle, targets: Handle, weights: Handle, wint: Handle, m: usize) -> DevGraph {
+        let kint: Vec<i64> = strength.iter().map(|&k| moving::to_fx(k)).collect();
+        DevGraph { off, targets, weights, strength: self.up(f64::as_bytes(strength)), kint: self.up(i64::as_bytes(&kint)), wint, m }
+    }
+
     fn up(&self, b: &[u8]) -> Handle {
         self.client.create_from_slice(b)
     }
@@ -1251,7 +1283,7 @@ impl Gpu {
 
     /// aggregate::aggregate_fx on the device, downloaded: (offsets, columns, fixed-point weights),
     /// or None if a row has more than AG_MAX_ROW distinct columns (the rank sort is quadratic).
-    fn aggregate_dev(&self, d: &DevGraph, n: usize, labels: &[u32], nl: usize) -> Option<(Vec<usize>, Vec<u32>, Vec<i64>)> {
+    fn aggregate_dev(&self, d: &DevGraph, n: usize, labels: &[u32], nl: usize) -> Option<(Vec<usize>, Vec<u32>, Vec<i64>, [Handle; 3])> {
         let c = &self.client;
         let h_labels = self.up(u32::as_bytes(labels));
         let h_cap = self.up(u32::as_bytes(&vec![0u32; nl]));
@@ -1290,9 +1322,9 @@ impl Gpu {
                 arg(&h_out_off, nl + 1), arg(&h_fill, nl), arg(&tc, m), arg(&tw, m));
             ag_rank::launch_unchecked(c, mc, md, arg(&h_out_off, nl + 1), nl as u32, arg(&tc, m), arg(&tw, m), arg(&cols, m), arg(&ws, m));
         }
-        let r = c.read(vec![cols, ws]).unwrap();
+        let r = c.read(vec![cols.clone(), ws.clone()]).unwrap();
         let offsets = out_off.iter().map(|&o| o as usize).collect();
-        Some((offsets, u32::from_bytes(&r[0]).to_vec(), i64::from_bytes(&r[1]).to_vec()))
+        Some((offsets, u32::from_bytes(&r[0]).to_vec(), i64::from_bytes(&r[1]).to_vec(), [h_out_off, cols, ws]))
     }
 
     /// refine::refine_orderfree on the device: refined labels (dense) and their count.
@@ -1422,19 +1454,20 @@ impl Backend for Gpu {
     type Graph<'a, W: Weight> = GpuGraph<'a, W>;
 
     fn upload<'a, W: Weight>(&self, g: &'a Csr<W>) -> Self::Graph<'a, W> {
-        let dev = W::as_f32(&g.weights).filter(|_| g.n() >= GPU_MIN_N).map(|w| {
+        let dev = (g.n() >= GPU_MIN_N).then(|| {
+            let m = g.targets.len();
             let off: Vec<u32> = g.offsets.iter().map(|&o| o as u32).collect();
-            let kint: Vec<i64> = g.strength.iter().map(|&k| moving::to_fx(k)).collect();
-            let wint: Vec<i64> = w.iter().map(|&x| moving::to_fx(x as f64)).collect();
-            DevGraph {
-                off: self.up(u32::as_bytes(&off)),
-                targets: self.up(u32::as_bytes(&g.targets)),
-                weights: self.up(f32::as_bytes(w)),
-                strength: self.up(f64::as_bytes(&g.strength)),
-                kint: self.up(i64::as_bytes(&kint)),
-                wint: self.up(i64::as_bytes(&wint)),
-                m: g.targets.len(),
-            }
+            let wint: Vec<i64> = g.weights.iter().map(|&x| moving::to_fx(x.into())).collect();
+            let weights = match W::as_f32(&g.weights) {
+                Some(w) => {
+                    let (h32, h64) = (self.up(f32::as_bytes(w)), self.client.empty(m * 8));
+                    let (gc, gd) = Self::grid(m.min(GRID_CAP));
+                    unsafe { widen::launch_unchecked(&self.client, gc, gd, arg(&h32, m), arg(&h64, m)) };
+                    h64
+                }
+                None => self.up(f64::as_bytes(&g.weights.iter().map(|&x| x.into()).collect::<Vec<f64>>())),
+            };
+            self.dev_graph(&g.strength, self.up(u32::as_bytes(&off)), self.up(u32::as_bytes(&g.targets)), weights, self.up(i64::as_bytes(&wint)), m)
         });
         GpuGraph { host: Cow::Borrowed(g), dev }
     }
@@ -1462,9 +1495,19 @@ impl Backend for Gpu {
     }
     fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64> {
         if let (Some(d), Apply::OrderFree) = (&g.dev, apply) {
-            if let Some((offsets, cols, sums)) = self.aggregate_dev(d, g.host.n(), labels, n_labels) {
+            if let Some((offsets, cols, sums, [h_off, h_cols, h_ws])) = self.aggregate_dev(d, g.host.n(), labels, n_labels) {
                 let w = sums.into_iter().map(moving::fx).collect();
-                return GpuGraph { host: Cow::Owned(Csr::from_parts(offsets, cols, w)), dev: None };
+                let host = Csr::from_parts(offsets, cols, w);
+                // the coarse graph stays on the device too (n >= GPU_COARSE_MIN_N); the host copy serves
+                // the small levels, the trace and the hashes
+                let dev = (n_labels >= GPU_COARSE_MIN_N).then(|| {
+                    let m = host.targets.len();
+                    let h_w = self.client.empty(m * 8);
+                    let (gc, gd) = Self::grid(m.min(GRID_CAP));
+                    unsafe { ag_weights::launch_unchecked(&self.client, gc, gd, arg(&h_ws, m), arg(&h_w, m)) };
+                    self.dev_graph(&host.strength, h_off, h_cols, h_w, h_ws, m)
+                });
+                return GpuGraph { host: Cow::Owned(host), dev };
             }
         }
         GpuGraph { host: Cpu.aggregate(&g.host, labels, n_labels, apply), dev: None }
@@ -1494,7 +1537,7 @@ pub fn check_decide(g: &Graph, comm: &[u32], gamma: f64) -> (usize, usize, usize
     let off: Vec<u32> = c.offsets.iter().map(|&o| o as u32).collect();
     let verts: Vec<u32> = (0..n as u32).collect();
     let h = |b: &[u8]| gpu.up(b);
-    let (h_off, h_t, h_w, h_s) = (h(u32::as_bytes(&off)), h(u32::as_bytes(&c.targets)), h(f32::as_bytes(&c.weights)), h(f64::as_bytes(&c.strength)));
+    let (h_off, h_t, h_w, h_s) = (h(u32::as_bytes(&off)), h(u32::as_bytes(&c.targets)), h(f64::as_bytes(&c.weights.iter().map(|&w| w as f64).collect::<Vec<_>>())), h(f64::as_bytes(&c.strength)));
     let (h_c, h_tot, h_size, h_v, h_aff) = (h(u32::as_bytes(comm)), h(f64::as_bytes(&tot)), h(u32::as_bytes(&size)), h(u32::as_bytes(&verts)), h(u32::as_bytes(&vec![1u32; n])));
     let (o_to, o_wto, o_wfrom, h_hubs, h_cnt) = (cl.empty(n * 4), cl.empty(n * 8), cl.empty(n * 8), cl.empty(n * 4), h(u32::as_bytes(&[0u32])));
     let h_cur = h(u32::as_bytes(&[n as u32]));
