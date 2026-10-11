@@ -1092,6 +1092,65 @@ fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap
     }
 }
 
+/// moving::to_fx for x >= 0: round(x * FX), half away from zero, without a round intrinsic.
+/// floor(y + 0.5) is exact for 0.5 <= y < 2^52 (0.5 is a multiple of y's ulp, and crossing a
+/// power of two only rounds up where round() does too); below 0.5 it can round 0.49999… up.
+#[cube]
+fn to_fxv(x: f64) -> i64 {
+    let y = x * f64::new(16_777_216.0f32);
+    let mut r = i64::new(0);
+    if y >= f64::new(4_503_599_627_370_496.0f32) {
+        r = i64::cast_from(y); // already an integer
+    } else if y >= f64::new(0.5f32) {
+        r = i64::cast_from(Floor::floor(y + f64::new(0.5f32)));
+    }
+    r
+}
+
+#[cube(launch_unchecked)]
+fn fx_weights(w: &[f64], wint: &mut [i64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < w.len() {
+        wint[s] = to_fxv(w[s]);
+        s += stride;
+    }
+}
+
+/// Community totals (fixed point, then as f64) and sizes of `comm`, and every vertex affected.
+#[cube(launch_unchecked)]
+fn mv_zero(tot_int: &mut [i64], size: &mut [u32], aff: &mut [u32]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < tot_int.len() {
+        tot_int[s] = i64::new(0);
+        size[s] = 0;
+        if s < aff.len() {
+            aff[s] = 1;
+        }
+        s += stride;
+    }
+}
+
+#[cube(launch_unchecked)]
+fn mv_init(comm: &[u32], kint: &[i64], tot_int: &[Atomic<i64>], size: &[Atomic<u32>]) {
+    let v = ABSOLUTE_POS;
+    if v < comm.len() {
+        tot_int[comm[v] as usize].fetch_add(kint[v]);
+        size[comm[v] as usize].fetch_add(1u32);
+    }
+}
+
+#[cube(launch_unchecked)]
+fn mv_tot(tot_int: &[i64], tot: &mut [f64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < tot.len() {
+        tot[s] = fxv(tot_int[s]);
+        s += stride;
+    }
+}
+
 /// f64 copies of f32 weights (exact), so f32 inputs upload half the bytes.
 #[cube(launch_unchecked)]
 fn widen(src: &[f32], dst: &mut [f64]) {
@@ -1211,6 +1270,13 @@ impl Gpu {
     fn dev_graph(&self, strength: &[f64], off: Handle, targets: Handle, weights: Handle, wint: Handle, m: usize) -> DevGraph {
         let kint: Vec<i64> = strength.iter().map(|&k| moving::to_fx(k)).collect();
         DevGraph { off, targets, weights, strength: self.up(f64::as_bytes(strength)), kint: self.up(i64::as_bytes(&kint)), wint, m }
+    }
+
+    /// Upload through a pinned staging buffer (large, one-off buffers: the input graph).
+    fn up_pinned(&self, b: &[u8]) -> Handle {
+        let mut bytes = cubecl::bytes::Bytes::from_bytes_vec(b.to_vec());
+        self.client.staging(std::iter::once(&mut bytes), false);
+        self.client.create(bytes)
     }
 
     fn up(&self, b: &[u8]) -> Handle {
@@ -1378,23 +1444,27 @@ impl Gpu {
         if n == 0 || g.total <= 0.0 {
             return (0, 0);
         }
+        let trace = std::env::var_os("DETLEIDEN_TRACE").is_some();
+        let t_all = std::time::Instant::now();
         let scale = gamma / g.total;
         let ids = 2 * n;
-        let mut tot_int = vec![0i64; ids];
-        let mut size = vec![0u32; ids];
-        for v in 0..n {
-            tot_int[comm[v] as usize] += moving::to_fx(g.strength[v]);
-            size[comm[v] as usize] += 1;
-        }
-        let tot: Vec<f64> = tot_int.iter().map(|&t| moving::fx(t)).collect();
         let c = &self.client;
         let tc = std::time::Instant::now();
         let (lens, goffs, h_keys, h_group_of, h_alist) = self.colour_dev(d, n, seed, step);
         if std::env::var_os("DETLEIDEN_TRACE").is_some() {
             eprintln!("    colouring (GPU) n {n}: {:.4} s, {} colours", tc.elapsed().as_secs_f64(), lens.len());
         }
-        let (h_comm, h_tot_int, h_tot, h_size) = (self.up(u32::as_bytes(comm)), self.up(i64::as_bytes(&tot_int)), self.up(f64::as_bytes(&tot)), self.up(u32::as_bytes(&size)));
-        let h_aff = self.up(u32::as_bytes(&vec![1u32; n]));
+        let h_comm = self.up(u32::as_bytes(comm));
+        let (h_tot_int, h_tot, h_size, h_aff) = (c.empty(ids * 8), c.empty(ids * 8), c.empty(ids * 4), c.empty(n * 4));
+        {
+            let (ic, id) = Self::grid(ids.min(GRID_CAP));
+            let (vc, vd) = Self::grid(n);
+            unsafe {
+                mv_zero::launch_unchecked(c, ic.clone(), id.clone(), arg(&h_tot_int, ids), arg(&h_size, ids), arg(&h_aff, n));
+                mv_init::launch_unchecked(c, vc, vd, arg(&h_comm, n), arg(&d.kint, n), arg(&h_tot_int, ids), arg(&h_size, ids));
+                mv_tot::launch_unchecked(c, ic, id, arg(&h_tot_int, ids), arg(&h_tot, ids));
+            }
+        }
         let (h_heads_to, h_heads_from) = (c.empty(ids * 4), c.empty(ids * 4));
         // affected lists: one region per colour group (initially the whole group, from colour_dev)
         let (h_goffs, h_acount) = (self.up(u32::as_bytes(&goffs)), self.up(u32::as_bytes(&lens)));
@@ -1405,6 +1475,11 @@ impl Gpu {
         let (r_from, r_to, n_to, n_from, h_acc) = (c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4));
         let (h_hubs, h_hub_count) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])));
         let zero = [0u32];
+        if trace {
+            let _ = c.read_one(h_cur.clone());
+            eprintln!("    moving setup+colouring {:.4} s", t_all.elapsed().as_secs_f64());
+        }
+        let t_rounds = std::time::Instant::now();
         let mut rounds = 0;
         for _ in 0..1000 {
             rounds += 1;
@@ -1445,6 +1520,9 @@ impl Gpu {
                 break;
             }
         }
+        if trace {
+            eprintln!("    moving rounds {:.4} s ({rounds} rounds x {ng} groups)", t_rounds.elapsed().as_secs_f64());
+        }
         comm.copy_from_slice(u32::from_bytes(&c.read_one(h_comm).unwrap()));
         (ng, rounds)
     }
@@ -1457,17 +1535,19 @@ impl Backend for Gpu {
         let dev = (g.n() >= GPU_MIN_N).then(|| {
             let m = g.targets.len();
             let off: Vec<u32> = g.offsets.iter().map(|&o| o as u32).collect();
-            let wint: Vec<i64> = g.weights.iter().map(|&x| moving::to_fx(x.into())).collect();
             let weights = match W::as_f32(&g.weights) {
                 Some(w) => {
-                    let (h32, h64) = (self.up(f32::as_bytes(w)), self.client.empty(m * 8));
+                    let (h32, h64) = (self.up_pinned(f32::as_bytes(w)), self.client.empty(m * 8));
                     let (gc, gd) = Self::grid(m.min(GRID_CAP));
                     unsafe { widen::launch_unchecked(&self.client, gc, gd, arg(&h32, m), arg(&h64, m)) };
                     h64
                 }
                 None => self.up(f64::as_bytes(&g.weights.iter().map(|&x| x.into()).collect::<Vec<f64>>())),
             };
-            self.dev_graph(&g.strength, self.up(u32::as_bytes(&off)), self.up(u32::as_bytes(&g.targets)), weights, self.up(i64::as_bytes(&wint)), m)
+            let wint = self.client.empty(m * 8);
+            let (gc, gd) = Self::grid(m.min(GRID_CAP));
+            unsafe { fx_weights::launch_unchecked(&self.client, gc, gd, arg(&weights, m), arg(&wint, m)) };
+            self.dev_graph(&g.strength, self.up(u32::as_bytes(&off)), self.up_pinned(u32::as_bytes(&g.targets)), weights, wint, m)
         });
         GpuGraph { host: Cow::Borrowed(g), dev }
     }
