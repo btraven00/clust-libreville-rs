@@ -37,6 +37,17 @@ thread_local! {
 const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
 pub(crate) const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
 
+/// Per-community state of the apply step, valid while `stamp` is the current group's id.
+#[derive(Clone, Copy, Default)]
+struct ApplyState {
+    tot0: f64, // total at the group's start
+    inc: f64,  // weight of this group's proposals into it, so far (group order)
+    outg: f64, // weight of this group's proposals out of it, so far
+    size0: u32,
+    outc: u32, // number of proposals out of it, so far
+    stamp: u32,
+}
+
 pub(crate) struct Move {
     pub(crate) v: u32,
     pub(crate) to: u32,
@@ -191,10 +202,12 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
         tot[comm[v] as usize] += g.strength[v];
         size[comm[v] as usize] += 1;
     }
-    // proposal prefix sums per community (group order), reset after each group
-    let (mut inc, mut outg, mut outc) = (vec![0.0f64; 2 * n], vec![0.0f64; 2 * n], vec![0u32; 2 * n]);
-    let mut seen: Vec<u32> = Vec::new();
-    let mut acc: Vec<(u32, u32, u32, f64)> = Vec::new();
+    // per community, lazily reset per group (generation stamp): proposal prefix sums in group
+    // order, and the totals and sizes frozen at the group's start
+    // (one struct per community: the apply step touches all fields of a community together, so
+    // this is one cache line instead of six)
+    let mut cs = vec![ApplyState::default(); 2 * n];
+    let mut gid = 0u32;
 
 
     let affected: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(true)).collect();
@@ -229,46 +242,40 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
             // it, the source loses all proposals out of it. Only prefix sums over proposals, so no
             // accept depends on another accept: parallel-friendly (a GPU does it with a stable
             // sort and per-community scans in the same order) and bit-identical either way.
-            acc.clear();
+            // One pass: acceptance reads the frozen snapshot plus the prefixes, while the live
+            // totals update per community in group order.
+            gid += 1;
+            moved.clear();
             for m in &moves {
                 let (v, k) = (m.v as usize, g.strength[m.v as usize]);
                 let from = comm[v] as usize;
                 let to = if m.to == NEW { n + v } else { m.to as usize };
-                let stay = m.w_from - scale * k * (tot[from] - k - outg[from]);
-                let ok = if m.to == NEW {
-                    // a new community must be empty now and v must not be left alone already
-                    size[to] == 0 && size[from] - outc[from] > 1 && 0.0 > stay
-                } else {
-                    m.w_to - scale * k * (tot[to] + inc[to]) > stay
-                };
-                if ok {
-                    let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * (tot[to] + inc[to]) };
-                    acc.push((v as u32, from as u32, to as u32, go - stay));
-                }
                 for x in [from, to] {
-                    if outc[x] == 0 && inc[x] == 0.0 && outg[x] == 0.0 {
-                        seen.push(x as u32);
+                    if cs[x].stamp != gid {
+                        cs[x] = ApplyState { stamp: gid, tot0: tot[x], size0: size[x], ..Default::default() };
                     }
                 }
-                inc[to] += k;
-                outg[from] += k;
-                outc[from] += 1;
-            }
-            for &x in &seen {
-                (inc[x as usize], outg[x as usize], outc[x as usize]) = (0.0, 0.0, 0);
-            }
-            seen.clear();
-            // update totals per community in group order (a fixed f64 sequence per community)
-            moved.clear();
-            for &(v, from, to, gain) in &acc {
-                let (from, to, k) = (from as usize, to as usize, g.strength[v as usize]);
-                round_gain += gain;
-                tot[from] -= k;
-                size[from] -= 1;
-                tot[to] += k;
-                size[to] += 1;
-                comm[v as usize] = to as u32;
-                moved.push(v);
+                let (f, t) = (cs[from], cs[to]);
+                let stay = m.w_from - scale * k * (f.tot0 - k - f.outg);
+                let (ok, go) = if m.to == NEW {
+                    // a new community must be empty now and v must not be left alone already
+                    (t.size0 == 0 && f.size0 - f.outc > 1 && 0.0 > stay, 0.0)
+                } else {
+                    let go = m.w_to - scale * k * (t.tot0 + t.inc);
+                    (go > stay, go)
+                };
+                cs[to].inc += k;
+                cs[from].outg += k;
+                cs[from].outc += 1;
+                if ok {
+                    round_gain += go - stay;
+                    tot[from] -= k;
+                    size[from] -= 1;
+                    tot[to] += k;
+                    size[to] += 1;
+                    comm[v] = to as u32;
+                    moved.push(v as u32);
+                }
             }
             round_moves += moved.len();
             // mark, in parallel, the neighbours now in another community
