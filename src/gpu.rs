@@ -29,6 +29,7 @@ const HUB_CUBES: u32 = 64;
 const NONE: u32 = 0xFFFF_FFFF;
 // moving::NEW = u32::MAX: a move to a new community (id n + v)
 /// Below this many vertices local moving stays on the CPU (launch overheads win).
+const AG_MAX_ROW: usize = 8192; // ponytail: rank sort is O(k^2) per row; segmented sort if coarse rows grow
 const GPU_MIN_N: usize = 50_000;
 const BLOCK: u32 = 128;
 /// Threads of the grid-stride per-group kernels (they loop over the group's affected list).
@@ -1040,6 +1041,115 @@ fn rf_apply(verts: &[u32], len: u32, kint: &[i64], acc: &[u32], out_to: &[u32], 
     }
 }
 
+// ---- aggregation (aggregate::aggregate_fx, bit for bit) ------------------------------------------
+// Each coarse row r gets an open-addressing table over [cap_off[r], cap_off[r+1]), cap = the
+// summed degree of r's members (>= its distinct columns); columns are inserted by CAS and fixed-
+// point weights summed by i64 atomics (order-free), then each row is compacted and rank-sorted.
+
+#[cube(launch_unchecked)]
+fn ag_cap(offsets: &[u32], labels: &[u32], cap: &[Atomic<u32>]) {
+    let v = ABSOLUTE_POS;
+    if v < labels.len() {
+        cap[labels[v] as usize].fetch_add(offsets[v + 1] - offsets[v]);
+    }
+}
+
+#[cube(launch_unchecked)]
+fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap_off: &[u32], keys: &[Atomic<u32>],
+             vals: &[Atomic<i64>], cnt: &[Atomic<u32>]) {
+    let v = ABSOLUTE_POS;
+    if v < labels.len() {
+        let r = labels[v] as usize;
+        let base = cap_off[r];
+        let cap = cap_off[r + 1] - base;
+        for e in offsets[v] as usize..offsets[v + 1] as usize {
+            let c = labels[targets[e] as usize];
+            let mut slot = u32::cast_from((u64::cast_from(c) * 0x9E37_79B1u64) % u64::cast_from(cap));
+            let mut done = false;
+            while !done {
+                // ponytail: CUDA's CAS is strong; a weak CAS that fails spuriously (allowed on
+                // Metal/WGSL) would drop a column. Re-check before the Metal test.
+                let old = keys[(base + slot) as usize].compare_exchange_weak(NONE, c);
+                if old == NONE || old == c {
+                    vals[(base + slot) as usize].fetch_add(wint[e]);
+                    if old == NONE {
+                        cnt[r].fetch_add(1u32);
+                    }
+                    done = true;
+                } else {
+                    slot += 1;
+                    if slot == cap {
+                        slot = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+fn ag_clear(keys: &mut [u32], vals: &mut [i64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < keys.len() {
+        keys[s] = NONE;
+        vals[s] = i64::new(0);
+        s += stride;
+    }
+}
+
+/// Largest r with off[r] <= x (off ascending, off[0] = 0 <= x).
+#[cube]
+fn row_of(off: &[u32], nrows: u32, x: u32) -> u32 {
+    let mut lo = 0u32;
+    let mut hi = nrows;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if off[mid as usize] <= x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+#[cube(launch_unchecked)]
+fn ag_compact(cap_off: &[u32], nrows: u32, keys: &[u32], vals: &[i64], out_off: &[u32], fill: &[Atomic<u32>], tc: &mut [u32],
+              tw: &mut [i64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < keys.len() {
+        if keys[s] != NONE {
+            let r = row_of(cap_off, nrows, s as u32) as usize;
+            let at = out_off[r] + fill[r].fetch_add(1u32);
+            tc[at as usize] = keys[s];
+            tw[at as usize] = vals[s];
+        }
+        s += stride;
+    }
+}
+
+/// Columns ascending within each row (distinct, so the rank is the position).
+#[cube(launch_unchecked)]
+fn ag_rank(out_off: &[u32], nrows: u32, tc: &[u32], tw: &[i64], cols: &mut [u32], ws: &mut [i64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < tc.len() {
+        let r = row_of(out_off, nrows, s as u32) as usize;
+        let c = tc[s];
+        let mut rank = 0u32;
+        for t in out_off[r] as usize..out_off[r + 1] as usize {
+            if tc[t] < c {
+                rank += 1;
+            }
+        }
+        cols[(out_off[r] + rank) as usize] = c;
+        ws[(out_off[r] + rank) as usize] = tw[s];
+        s += stride;
+    }
+}
+
 pub(crate) struct DevGraph {
     off: Handle,
     targets: Handle,
@@ -1137,6 +1247,52 @@ impl Gpu {
             eprintln!("    jp: setup {t_setup:.4} s (incl. the first touch of the uploaded graph), rounds {t_rounds:.4} s (<= {jp_rounds}), grouping {:.4} s", t0.elapsed().as_secs_f64());
         }
         (counts, goffs, h_keys, h_colour, h_alist)
+    }
+
+    /// aggregate::aggregate_fx on the device, downloaded: (offsets, columns, fixed-point weights),
+    /// or None if a row has more than AG_MAX_ROW distinct columns (the rank sort is quadratic).
+    fn aggregate_dev(&self, d: &DevGraph, n: usize, labels: &[u32], nl: usize) -> Option<(Vec<usize>, Vec<u32>, Vec<i64>)> {
+        let c = &self.client;
+        let h_labels = self.up(u32::as_bytes(labels));
+        let h_cap = self.up(u32::as_bytes(&vec![0u32; nl]));
+        let (cc, cd) = Self::grid(n);
+        unsafe { ag_cap::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&h_labels, n), arg(&h_cap, nl)) };
+        let scan = |x: &[u32]| -> Vec<u32> {
+            let mut o = vec![0u32; x.len() + 1];
+            for i in 0..x.len() {
+                o[i + 1] = o[i] + x[i];
+            }
+            o
+        };
+        let cap_off = scan(u32::from_bytes(&c.read_one(h_cap).unwrap()));
+        let slots = cap_off[nl] as usize; // = d.m
+        let h_cap_off = self.up(u32::as_bytes(&cap_off));
+        let (h_keys, h_vals) = (c.empty(slots * 4), c.empty(slots * 8));
+        let h_cnt = self.up(u32::as_bytes(&vec![0u32; nl]));
+        let (sc, sd) = Self::grid(slots.min(GRID_CAP));
+        unsafe {
+            ag_clear::launch_unchecked(c, sc.clone(), sd.clone(), arg(&h_keys, slots), arg(&h_vals, slots));
+            ag_insert::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&h_labels, n),
+                arg(&h_cap_off, nl + 1), arg(&h_keys, slots), arg(&h_vals, slots), arg(&h_cnt, nl));
+        }
+        let cnt = u32::from_bytes(&c.read_one(h_cnt).unwrap()).to_vec();
+        if cnt.iter().any(|&k| k as usize > AG_MAX_ROW) {
+            return None;
+        }
+        let out_off = scan(&cnt);
+        let m = out_off[nl] as usize;
+        let h_out_off = self.up(u32::as_bytes(&out_off));
+        let h_fill = self.up(u32::as_bytes(&vec![0u32; nl]));
+        let (tc, tw, cols, ws) = (c.empty(m * 4), c.empty(m * 8), c.empty(m * 4), c.empty(m * 8));
+        let (mc, md) = Self::grid(m.min(GRID_CAP));
+        unsafe {
+            ag_compact::launch_unchecked(c, sc, sd, arg(&h_cap_off, nl + 1), nl as u32, arg(&h_keys, slots), arg(&h_vals, slots),
+                arg(&h_out_off, nl + 1), arg(&h_fill, nl), arg(&tc, m), arg(&tw, m));
+            ag_rank::launch_unchecked(c, mc, md, arg(&h_out_off, nl + 1), nl as u32, arg(&tc, m), arg(&tw, m), arg(&cols, m), arg(&ws, m));
+        }
+        let r = c.read(vec![cols, ws]).unwrap();
+        let offsets = out_off.iter().map(|&o| o as usize).collect();
+        Some((offsets, u32::from_bytes(&r[0]).to_vec(), i64::from_bytes(&r[1]).to_vec()))
     }
 
     /// refine::refine_orderfree on the device: refined labels (dense) and their count.
@@ -1305,6 +1461,12 @@ impl Backend for Gpu {
         }
     }
     fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64> {
+        if let (Some(d), Apply::OrderFree) = (&g.dev, apply) {
+            if let Some((offsets, cols, sums)) = self.aggregate_dev(d, g.host.n(), labels, n_labels) {
+                let w = sums.into_iter().map(moving::fx).collect();
+                return GpuGraph { host: Cow::Owned(Csr::from_parts(offsets, cols, w)), dev: None };
+            }
+        }
         GpuGraph { host: Cpu.aggregate(&g.host, labels, n_labels, apply), dev: None }
     }
 }
