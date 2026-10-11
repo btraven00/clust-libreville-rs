@@ -7,7 +7,7 @@ pub(crate) const COLOUR_ORDER: u64 = 1;
 pub(crate) const REFINE_ORDER: u64 = 2;
 pub(crate) const REFINE_DRAW: u64 = 3;
 
-fn mix(mut z: u64) -> u64 {
+pub(crate) fn mix(mut z: u64) -> u64 {
     // SplitMix64 finaliser
     z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

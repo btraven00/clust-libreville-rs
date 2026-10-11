@@ -33,6 +33,8 @@ const GPU_MIN_N: usize = 50_000;
 const BLOCK: u32 = 128;
 /// Threads of the grid-stride per-group kernels (they loop over the group's affected list).
 const GRID_CAP: usize = 16_384;
+/// Jones–Plassmann rounds launched between two host reads of the frontier size.
+const JP_BATCH: usize = 8;
 
 /// Sum of row v, in CSR order: one thread per row, so the order is fixed. (Smoke test.)
 #[cube(launch_unchecked)]
@@ -337,6 +339,143 @@ fn decide_hubs(offsets: &[u32], targets: &[u32], weights: &[f32], strength: &[f6
     }
 }
 
+/// SplitMix64 finaliser (rng::mix); the constants come in as arguments (c0, c1, c2).
+#[cube]
+fn mix64(z0: u64, c0: u64, c1: u64, c2: u64) -> u64 {
+    let mut z = z0 + c0;
+    z = (z ^ (z >> 30u64)) * c1;
+    z = (z ^ (z >> 27u64)) * c2;
+    z ^ (z >> 31u64)
+}
+
+/// Is u before v in the seeded order? (rng::order sorts by (key, vertex).)
+#[cube]
+fn earlier(keys: &[u64], u: usize, v: usize) -> bool {
+    let (ku, kv) = (keys[u], keys[v]);
+    let mut e = ku < kv;
+    if ku == kv {
+        e = u < v;
+    }
+    e
+}
+
+/// Colouring, step 1: each vertex's seeded key (rng::key = mix(prefix ^ v), prefix from the
+/// host), its number of earlier neighbours, and the first frontier (no earlier neighbours).
+#[cube(launch_unchecked)]
+fn jp_init(prefix: u64, c0: u64, c1: u64, c2: u64, keys: &mut [u64]) {
+    let v = ABSOLUTE_POS;
+    if v < keys.len() {
+        keys[v] = mix64(prefix ^ u64::cast_from(v), c0, c1, c2);
+    }
+}
+
+#[cube(launch_unchecked)]
+fn jp_count(offsets: &[u32], targets: &[u32], keys: &[u64], waiting: &mut [u32], frontier: &mut [u32], fcount: &[Atomic<u32>]) {
+    let v = ABSOLUTE_POS;
+    if v < waiting.len() {
+        let mut w = 0u32;
+        for e in offsets[v] as usize..offsets[v + 1] as usize {
+            let u = targets[e] as usize;
+            if u != v && earlier(keys, u, v) {
+                w += 1;
+            }
+        }
+        waiting[v] = w;
+        if w == 0 {
+            frontier[fcount[0].fetch_add(1u32) as usize] = v as u32;
+        }
+    }
+}
+
+/// Colouring, one Jones–Plassmann round: each frontier vertex (all its earlier neighbours are
+/// coloured) takes the smallest colour none of them has (= the sequential greedy pass), then
+/// releases its later neighbours; those with no earlier neighbour left form the next frontier.
+#[cube(launch_unchecked)]
+fn jp_round(offsets: &[u32], targets: &[u32], keys: &[u64], frontier: &[u32], fcount: &[u32], colour: &mut [u32],
+            waiting: &[Atomic<u32>], next: &mut [u32], ncount: &[Atomic<u32>], maxcol: &[Atomic<u32>]) {
+    let count = fcount[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        let v = frontier[i] as usize;
+        let (start, end) = (offsets[v] as usize, offsets[v + 1] as usize);
+        let mut lo = u64::new(0);
+        let mut hi = u64::new(0);
+        for e in start..end {
+            let u = targets[e] as usize;
+            if u != v && earlier(keys, u, v) {
+                let c = colour[u];
+                if c < 64 {
+                    lo = lo | (u64::new(1) << u64::cast_from(c));
+                } else if c < 128 {
+                    hi = hi | (u64::new(1) << u64::cast_from(c - 64));
+                }
+            }
+        }
+        let mut col = !u32::new(0);
+        for c in 0..128u32 {
+            let used = if c < 64 {
+                ((lo >> u64::cast_from(c)) & u64::new(1)) == u64::new(1)
+            } else {
+                ((hi >> u64::cast_from(c - 64)) & u64::new(1)) == u64::new(1)
+            };
+            if !used && col == !u32::new(0) {
+                col = c;
+            }
+        }
+        if col == !u32::new(0) {
+            // 128+ colours among earlier neighbours (not seen on level-0 kNN graphs): scan upwards
+            let mut c = 128u32;
+            let mut found = false;
+            while !found {
+                let mut used = false;
+                for e in start..end {
+                    let u = targets[e] as usize;
+                    if u != v && earlier(keys, u, v) && colour[u] == c {
+                        used = true;
+                    }
+                }
+                if used {
+                    c += 1;
+                } else {
+                    found = true;
+                }
+            }
+            col = c;
+        }
+        colour[v] = col;
+        maxcol[0].fetch_max(col);
+        for e in start..end {
+            let u = targets[e] as usize;
+            if u != v && earlier(keys, v, u) {
+                if waiting[u].fetch_sub(1u32) == 1 {
+                    next[ncount[0].fetch_add(1u32) as usize] = u as u32;
+                }
+            }
+        }
+        i += stride;
+    }
+}
+
+/// Group sizes, then each vertex into its group's region of the affected list (unordered: all
+/// ordering keys on the seeded key).
+#[cube(launch_unchecked)]
+fn jp_hist(colour: &[u32], counts: &[Atomic<u32>]) {
+    let v = ABSOLUTE_POS;
+    if v < colour.len() {
+        counts[colour[v] as usize].fetch_add(1u32);
+    }
+}
+
+#[cube(launch_unchecked)]
+fn jp_scatter(colour: &[u32], goffs: &[u32], fill: &[Atomic<u32>], alist: &mut [u32]) {
+    let v = ABSOLUTE_POS;
+    if v < colour.len() {
+        let c = colour[v] as usize;
+        alist[(goffs[c] + fill[c].fetch_add(1u32)) as usize] = v as u32;
+    }
+}
+
 /// Start a group: snapshot its affected count (what this group's kernels process) and reset it
 /// (later groups' marks append for the next round).
 #[cube(launch_unchecked)]
@@ -394,7 +533,7 @@ fn link(cur: &[u32], out_to: &[u32], res_from: &[u32], res_to: &[u32], heads_to:
 /// proposals (group positions < i) into the target and out of the source. Exactly
 /// moving::move_nodes' OrderFree branch.
 #[cube(launch_unchecked)]
-fn accept(verts: &[u32], cur: &[u32], pos: &[u32], strength: &[f64], kint: &[i64], tot_int: &[i64], size: &[u32], scale: f64,
+fn accept(verts: &[u32], cur: &[u32], keys: &[u64], strength: &[f64], kint: &[i64], tot_int: &[i64], size: &[u32], scale: f64,
           out_to: &[u32], out_wto: &[f64], out_wfrom: &[f64], res_from: &[u32], res_to: &[u32],
           heads_to: &[Atomic<u32>], heads_from: &[Atomic<u32>], next_to: &[u32], next_from: &[u32], acc: &mut [u32]) {
     let count = cur[0] as usize;
@@ -404,12 +543,12 @@ fn accept(verts: &[u32], cur: &[u32], pos: &[u32], strength: &[f64], kint: &[i64
         acc[i] = 0;
         if out_to[i] != STAY {
             let v = verts[i] as usize;
-            let pi = pos[v]; // "earlier" = earlier in the group's order (lists are unordered)
+            // "earlier" = earlier in the seeded order = the group's order (lists are unordered)
             let (from, to) = (res_from[i] as usize, res_to[i] as usize);
             let mut inc = i64::new(0);
             let mut j = heads_to[to].load();
             while j != NONE {
-                if pos[verts[j as usize] as usize] < pi {
+                if earlier(keys, verts[j as usize] as usize, v) {
                     inc += kint[verts[j as usize] as usize];
                 }
                 j = next_to[j as usize];
@@ -418,7 +557,7 @@ fn accept(verts: &[u32], cur: &[u32], pos: &[u32], strength: &[f64], kint: &[i64
             let mut outc = 0u32;
             let mut j = heads_from[from].load();
             while j != NONE {
-                if pos[verts[j as usize] as usize] < pi {
+                if earlier(keys, verts[j as usize] as usize, v) {
                     outg += kint[verts[j as usize] as usize];
                     outc += 1;
                 }
@@ -547,6 +686,66 @@ impl Gpu {
         (CubeCount::Static((len.max(1) as u32).div_ceil(BLOCK), 1, 1), CubeDim::new_1d(BLOCK))
     }
 
+    /// The colouring of moving::colouring(g, seed, step), on the device (Jones–Plassmann over the
+    /// seeded keys): group sizes, plus the keys, each vertex's colour (= its group) and the
+    /// groups' vertex lists (regions at `goffs`, unordered), all resident.
+    fn colour_dev(&self, d: &DevGraph, n: usize, seed: u64, step: u64) -> (Vec<u32>, Vec<u32>, Handle, Handle, Handle) {
+        let c = &self.client;
+        let prefix = crate::rng::mix(crate::rng::mix(crate::rng::mix(seed) ^ crate::rng::COLOUR_ORDER) ^ step);
+        let (h_keys, h_wait, h_colour) = (c.empty(n * 8), c.empty(n * 4), c.empty(n * 4));
+        let (mut fr, mut nx) = (c.empty(n * 4), c.empty(n * 4));
+        let h_fc = self.up(u32::as_bytes(&[0u32]));
+        let h_max = self.up(u32::as_bytes(&[0u32]));
+        let (cc, cd) = Self::grid(n);
+        let t0 = std::time::Instant::now();
+        unsafe {
+            jp_init::launch_unchecked(c, cc.clone(), cd.clone(), prefix, 0x9E37_79B9_7F4A_7C15u64, 0xBF58_476D_1CE4_E5B9u64,
+                0x94D0_49BB_1331_11EBu64, arg(&h_keys, n));
+            jp_count::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_keys, n),
+                arg(&h_wait, n), arg(&fr, n), arg(&h_fc, 1));
+        }
+        // rounds in batches: round r of a batch reads its frontier size from counts[r] and writes
+        // the next one to counts[r + 1], so the host reads once per batch; rounds past an empty
+        // frontier do nothing
+        let mut count = u32::from_bytes(&c.read_one(h_fc.clone()).unwrap())[0];
+        let t_setup = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        let mut jp_rounds = 0;
+        let (rc, rd) = Self::grid(n.min(GRID_CAP));
+        while count > 0 {
+            let mut init = vec![0u32; JP_BATCH + 1];
+            init[0] = count;
+            let h_counts = self.up(u32::as_bytes(&init));
+            for r in 0..JP_BATCH {
+                let at = |h: &Handle, k: usize| arg(&h.clone().offset_start(4 * k as u64), 1);
+                unsafe {
+                    jp_round::launch_unchecked(c, rc.clone(), rd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_keys, n),
+                        arg(&fr, n), at(&h_counts, r), arg(&h_colour, n), arg(&h_wait, n), arg(&nx, n), at(&h_counts, r + 1), arg(&h_max, 1));
+                }
+                std::mem::swap(&mut fr, &mut nx);
+            }
+            jp_rounds += JP_BATCH;
+            count = u32::from_bytes(&c.read_one(h_counts.clone().offset_start(4 * JP_BATCH as u64)).unwrap())[0];
+        }
+        let t_rounds = t0.elapsed().as_secs_f64();
+        let t0 = std::time::Instant::now();
+        let ng = u32::from_bytes(&c.read_one(h_max).unwrap())[0] as usize + 1;
+        let h_counts = self.up(u32::as_bytes(&vec![0u32; ng]));
+        unsafe { jp_hist::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_colour, n), arg(&h_counts, ng)) };
+        let counts = u32::from_bytes(&c.read_one(h_counts).unwrap()).to_vec();
+        let mut goffs = vec![0u32; ng + 1];
+        for g in 0..ng {
+            goffs[g + 1] = goffs[g] + counts[g];
+        }
+        let (h_goffs, h_fill, h_alist) = (self.up(u32::as_bytes(&goffs)), self.up(u32::as_bytes(&vec![0u32; ng])), c.empty(n * 4));
+        unsafe { jp_scatter::launch_unchecked(c, cc, cd, arg(&h_colour, n), arg(&h_goffs, ng + 1), arg(&h_fill, ng), arg(&h_alist, n)) };
+        if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+            let _ = c.read_one(h_fill.clone());
+            eprintln!("    jp: setup {t_setup:.4} s (incl. the first touch of the uploaded graph), rounds {t_rounds:.4} s (<= {jp_rounds}), grouping {:.4} s", t0.elapsed().as_secs_f64());
+        }
+        (counts, goffs, h_keys, h_colour, h_alist)
+    }
+
     /// moving::move_nodes with Apply::OrderFree and tol = 0, entirely on the device.
     fn move_nodes_dev<W: Weight>(&self, g: &Csr<W>, d: &DevGraph, comm: &mut [u32], gamma: f64, seed: u64, step: u64) -> (usize, usize) {
         let n = g.n();
@@ -562,30 +761,20 @@ impl Gpu {
             size[comm[v] as usize] += 1;
         }
         let tot: Vec<f64> = tot_int.iter().map(|&t| moving::fx(t)).collect();
-        let groups = moving::colouring(g, seed, step);
         let c = &self.client;
+        let tc = std::time::Instant::now();
+        let (lens, goffs, h_keys, h_group_of, h_alist) = self.colour_dev(d, n, seed, step);
+        if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+            eprintln!("    colouring (GPU) n {n}: {:.4} s, {} colours", tc.elapsed().as_secs_f64(), lens.len());
+        }
         let (h_comm, h_tot_int, h_tot, h_size) = (self.up(u32::as_bytes(comm)), self.up(i64::as_bytes(&tot_int)), self.up(f64::as_bytes(&tot)), self.up(u32::as_bytes(&size)));
         let h_aff = self.up(u32::as_bytes(&vec![1u32; n]));
         let (h_heads_to, h_heads_from) = (c.empty(ids * 4), c.empty(ids * 4));
-        // affected lists: one region per colour group (offset goffs[g], capacity = group size),
-        // initially the whole group; group_of / pos give each vertex's group and position in it
-        let mut goffs = Vec::with_capacity(groups.len() + 1);
-        let (mut group_of, mut pos) = (vec![0u32; n], vec![0u32; n]);
-        let mut alist: Vec<u32> = Vec::with_capacity(n);
-        for (gi, grp) in groups.iter().enumerate() {
-            goffs.push(alist.len() as u32);
-            for (p, &v) in grp.iter().enumerate() {
-                (group_of[v as usize], pos[v as usize]) = (gi as u32, p as u32);
-            }
-            alist.extend_from_slice(grp);
-        }
-        goffs.push(alist.len() as u32);
-        let acount: Vec<u32> = groups.iter().map(|g| g.len() as u32).collect();
-        let (h_alist, h_goffs, h_acount) = (self.up(u32::as_bytes(&alist)), self.up(u32::as_bytes(&goffs)), self.up(u32::as_bytes(&acount)));
-        let (h_group_of, h_pos) = (self.up(u32::as_bytes(&group_of)), self.up(u32::as_bytes(&pos)));
+        // affected lists: one region per colour group (initially the whole group, from colour_dev)
+        let (h_goffs, h_acount) = (self.up(u32::as_bytes(&goffs)), self.up(u32::as_bytes(&lens)));
         let h_cur = c.empty(4);
-        let ng = groups.len();
-        let mg = groups.iter().map(|g| g.len()).max().unwrap_or(1).max(1);
+        let ng = lens.len();
+        let mg = lens.iter().copied().max().unwrap_or(1).max(1) as usize;
         let (o_to, o_wto, o_wfrom) = (c.empty(mg * 4), c.empty(mg * 8), c.empty(mg * 8));
         let (r_from, r_to, n_to, n_from, h_acc) = (c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4));
         let (h_hubs, h_hub_count) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])));
@@ -594,8 +783,8 @@ impl Gpu {
         for _ in 0..1000 {
             rounds += 1;
             let h_moves = self.up(u32::as_bytes(&zero));
-            for (gi, grp) in groups.iter().enumerate() {
-                let len = grp.len();
+            for (gi, &glen) in lens.iter().enumerate() {
+                let len = glen as usize;
                 // grid-stride kernels over the group's affected list: a capped grid
                 let (cc, cd) = Self::grid(len.min(GRID_CAP));
                 let goff = goffs[gi];
@@ -613,7 +802,7 @@ impl Gpu {
                         arg(&o_to, len), arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids));
                     link::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&o_to, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len), arg(&n_from, len), arg(&h_hub_count, 1));
-                    accept::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&h_pos, n), arg(&d.strength, n),
+                    accept::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&h_keys, n), arg(&d.strength, n),
                         arg(&d.kint, n), arg(&h_tot_int, ids), arg(&h_size, ids), scale, arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len),
                         arg(&n_from, len), arg(&h_acc, len));
@@ -631,7 +820,7 @@ impl Gpu {
             }
         }
         comm.copy_from_slice(u32::from_bytes(&c.read_one(h_comm).unwrap()));
-        (groups.len(), rounds)
+        (ng, rounds)
     }
 }
 
