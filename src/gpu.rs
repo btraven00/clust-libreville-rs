@@ -588,7 +588,7 @@ fn accept(verts: &[u32], cur: &[u32], keys: &[u64], strength: &[f64], kint: &[i6
 
 /// Apply the accepted moves: integer atomics on totals and sizes, new labels, a move count.
 #[cube(launch_unchecked)]
-fn apply(verts: &[u32], cur: &[u32], kint: &[i64], acc: &[u32], res_from: &[u32], res_to: &[u32], tot_int: &[Atomic<i64>],
+fn apply(verts: &[u32], cur: &[u32], kint: &[i64], acc: &[u32], res_from: &[u32], res_to: &[u32], tot_int: &[Atomic<u32>],
          size: &[Atomic<u32>], comm: &mut [u32], moves: &[Atomic<u32>]) {
     let count = cur[0] as usize;
     let stride = CUBE_COUNT * CUBE_DIM as usize;
@@ -597,8 +597,8 @@ fn apply(verts: &[u32], cur: &[u32], kint: &[i64], acc: &[u32], res_from: &[u32]
         if acc[i] == 1 {
         let v = verts[i] as usize;
         let kv = kint[v];
-        tot_int[res_from[i] as usize].fetch_sub(kv);
-        tot_int[res_to[i] as usize].fetch_add(kv);
+        add64(tot_int, res_from[i] as usize, i64::new(0) - kv);
+        add64(tot_int, res_to[i] as usize, kv);
         size[res_from[i] as usize].fetch_sub(1u32);
         size[res_to[i] as usize].fetch_add(1u32);
         comm[v] = res_to[i];
@@ -657,6 +657,29 @@ fn mark(offsets: &[u32], targets: &[u32], comm: &[u32], alist: &mut [u32], goff:
 
 // ---- refinement (refine::refine_orderfree, bit for bit) ----------------------------------------
 
+/// 64-bit integer atomic add on a pair of u32 atomics (lo at 2i, hi at 2i + 1: the buffer's
+/// little-endian i64 view), for backends with 32-bit atomics only (Metal, WGSL). Exact: each
+/// add carries into hi iff its own add wrapped lo, so the pair ends at the sum mod 2^64. Read the
+/// i64 view only after the kernel (no reader sees a half-applied add).
+#[cube]
+fn add64(a: &[Atomic<u32>], i: usize, x: i64) {
+    let ux = u64::cast_from(x);
+    let lo = u32::cast_from(ux & 0xFFFF_FFFFu64);
+    let hi = u32::cast_from(ux >> 32u64);
+    let old = a[2 * i].fetch_add(lo);
+    let mut carry = 0u32;
+    if old > !u32::new(0) - lo {
+        carry = 1u32;
+    }
+    a[2 * i + 1].fetch_add(hi + carry);
+}
+
+#[cube]
+fn zero64(a: &[Atomic<u32>], i: usize) {
+    a[2 * i].store(0u32);
+    a[2 * i + 1].store(0u32);
+}
+
 /// exp(x) for x <= 0 as (1 + x/256)^256 (rng::exp_neg).
 #[cube]
 fn exp_neg(x: f64) -> f64 {
@@ -693,7 +716,7 @@ fn rf_gain(c: u32, wsum: i64, own: u32, ext: &[i64], cw: &[i64], scale: f64, k: 
 
 #[cube(launch_unchecked)]
 fn rf_init(offsets: &[u32], targets: &[u32], wint: &[i64], comm: &[u32], kint: &[i64], refd: &mut [u32], cw: &mut [i64],
-           size: &mut [u32], ext: &mut [i64], ks: &[Atomic<i64>]) {
+           size: &mut [u32], ext: &mut [i64], ks: &[Atomic<u32>]) {
     let v = ABSOLUTE_POS;
     if v < refd.len() {
         refd[v] = v as u32;
@@ -708,7 +731,7 @@ fn rf_init(offsets: &[u32], targets: &[u32], wint: &[i64], comm: &[u32], kint: &
             }
         }
         ext[v] = e;
-        ks[cv as usize].fetch_add(kint[v]);
+        add64(ks, cv as usize, kint[v]);
     }
 }
 
@@ -1026,7 +1049,7 @@ fn rf_accept(verts: &[u32], len: u32, keys: &[u64], strength: &[f64], kint: &[i6
 
 #[cube(launch_unchecked)]
 fn rf_apply(verts: &[u32], len: u32, kint: &[i64], acc: &[u32], out_to: &[u32], out_w: &[i64], out_ext: &[i64],
-            refd: &mut [u32], cw: &[Atomic<i64>], size: &[Atomic<u32>], ext: &[Atomic<i64>]) {
+            refd: &mut [u32], cw: &[Atomic<u32>], size: &[Atomic<u32>], ext: &[Atomic<u32>]) {
     let stride = CUBE_COUNT * CUBE_DIM as usize;
     let mut i = ABSOLUTE_POS;
     while i < len as usize {
@@ -1034,13 +1057,13 @@ fn rf_apply(verts: &[u32], len: u32, kint: &[i64], acc: &[u32], out_to: &[u32], 
             let v = verts[i] as usize;
             let own = refd[v] as usize;
             let c = out_to[i] as usize;
-            cw[own].store(i64::new(0));
+            zero64(cw, own);
             size[own].store(0u32);
-            ext[own].store(i64::new(0));
+            zero64(ext, own);
             refd[v] = c as u32;
-            cw[c].fetch_add(kint[v]);
+            add64(cw, c, kint[v]);
             size[c].fetch_add(1u32);
-            ext[c].fetch_add(out_ext[i] - out_w[i] - out_w[i]);
+            add64(ext, c, out_ext[i] - out_w[i] - out_w[i]);
         }
         i += stride;
     }
@@ -1061,7 +1084,7 @@ fn ag_cap(offsets: &[u32], labels: &[u32], cap: &[Atomic<u32>]) {
 
 #[cube(launch_unchecked)]
 fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap_off: &[u32], keys: &[Atomic<u32>],
-             vals: &[Atomic<i64>], cnt: &[Atomic<u32>]) {
+             vals: &[Atomic<u32>], cnt: &[Atomic<u32>]) {
     let v = ABSOLUTE_POS;
     if v < labels.len() {
         let r = labels[v] as usize;
@@ -1076,7 +1099,7 @@ fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap
                 // Metal/WGSL) would drop a column. Re-check before the Metal test.
                 let old = keys[(base + slot) as usize].compare_exchange_weak(NONE, c);
                 if old == NONE || old == c {
-                    vals[(base + slot) as usize].fetch_add(wint[e]);
+                    add64(vals, (base + slot) as usize, wint[e]);
                     if old == NONE {
                         cnt[r].fetch_add(1u32);
                     }
@@ -1133,10 +1156,10 @@ fn mv_zero(tot_int: &mut [i64], size: &mut [u32], aff: &mut [u32]) {
 }
 
 #[cube(launch_unchecked)]
-fn mv_init(comm: &[u32], kint: &[i64], tot_int: &[Atomic<i64>], size: &[Atomic<u32>]) {
+fn mv_init(comm: &[u32], kint: &[i64], tot_int: &[Atomic<u32>], size: &[Atomic<u32>]) {
     let v = ABSOLUTE_POS;
     if v < comm.len() {
-        tot_int[comm[v] as usize].fetch_add(kint[v]);
+        add64(tot_int, comm[v] as usize, kint[v]);
         size[comm[v] as usize].fetch_add(1u32);
     }
 }
@@ -1422,7 +1445,7 @@ impl Gpu {
         unsafe {
             ag_clear::launch_unchecked(c, sc.clone(), sd.clone(), arg(&h_keys, slots), arg(&h_vals, slots));
             ag_insert::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&h_labels, n),
-                arg(&h_cap_off, nl + 1), arg(&h_keys, slots), arg(&h_vals, slots), arg(&h_cnt, nl));
+                arg(&h_cap_off, nl + 1), arg(&h_keys, slots), arg(&h_vals, 2 * slots), arg(&h_cnt, nl));
         }
         let cnt = u32::from_bytes(&c.read_one(h_cnt).unwrap()).to_vec();
         if cnt.iter().any(|&k| k as usize > AG_MAX_ROW) {
@@ -1466,7 +1489,7 @@ impl Gpu {
         let (cc, cd) = Self::grid(n);
         unsafe {
             rf_init::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&h_comm, n),
-                arg(&d.kint, n), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n), arg(&h_ks, n));
+                arg(&d.kint, n), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n), arg(&h_ks, 2 * n));
         }
         for (gi, &glen) in lens.iter().enumerate() {
             let len = glen as usize;
@@ -1488,7 +1511,7 @@ impl Gpu {
                     arg(&d.kint, n), arg(&h_cw, n), scale, arg(&o_to, len), arg(&o_w, len), arg(&h_heads, n), arg(&h_next, len),
                     arg(&h_acc, len));
                 rf_apply::launch_unchecked(c, gc, gd, arg(&verts, len), l, arg(&d.kint, n), arg(&h_acc, len), arg(&o_to, len),
-                    arg(&o_w, len), arg(&o_ext, len), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n));
+                    arg(&o_w, len), arg(&o_ext, len), arg(&h_refd, n), arg(&h_cw, 2 * n), arg(&h_size, n), arg(&h_ext, 2 * n));
             }
         }
         let refd = u32::from_bytes(&c.read_one(h_refd).unwrap()).to_vec();
@@ -1522,7 +1545,7 @@ impl Gpu {
             let (vc, vd) = Self::grid(n);
             unsafe {
                 mv_zero::launch_unchecked(c, ic.clone(), id.clone(), arg(&h_tot_int, ids), arg(&h_size, ids), arg(&h_aff, n));
-                mv_init::launch_unchecked(c, vc, vd, arg(&h_comm, n), arg(&d.kint, n), arg(&h_tot_int, ids), arg(&h_size, ids));
+                mv_init::launch_unchecked(c, vc, vd, arg(&h_comm, n), arg(&d.kint, n), arg(&h_tot_int, 2 * ids), arg(&h_size, ids));
                 mv_tot::launch_unchecked(c, ic, id, arg(&h_tot_int, ids), arg(&h_tot, ids));
             }
         }
@@ -1572,7 +1595,7 @@ impl Gpu {
                         arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len),
                         arg(&n_from, len), arg(&h_acc, len));
                     apply::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&d.kint, n), arg(&h_acc, len),
-                        arg(&r_from, len), arg(&r_to, len), arg(&h_tot_int, ids), arg(&h_size, ids), arg(&h_comm, n), arg(&h_moves, 1));
+                        arg(&r_from, len), arg(&r_to, len), arg(&h_tot_int, 2 * ids), arg(&h_size, ids), arg(&h_comm, n), arg(&h_moves, 1));
                     refresh::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&h_acc, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_tot_int, ids), arg(&h_tot, ids));
                     mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
