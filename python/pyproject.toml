@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "detleiden"
+description = "Seeded, deterministic, parallel Leiden community detection: the same labels for the same seed at any thread count"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "btraven", email = "ben.uzh@proton.me" }]
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.22"]
+dynamic = ["version"]
+keywords = ["leiden", "community detection", "clustering", "single-cell", "graph"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.optional-dependencies]
+scanpy = ["anndata", "pandas"]
+test = ["pytest", "scipy"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "detleiden._core"
+features = ["pyo3/extension-module"]

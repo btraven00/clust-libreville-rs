@@ -5,6 +5,8 @@ edition = "2024"
 license = "MIT"
 description = "Seeded, deterministic Leiden community detection: the same labels for the same seed at any thread count"
 publish = false
+# what a package (crates.io, the Python sdist) ships: the library only
+include = ["src/**/*.rs", "Cargo.toml", "LICENSE", "README.md"]
 
 [dependencies]
 rayon = "1"
