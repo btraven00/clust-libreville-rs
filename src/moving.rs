@@ -38,12 +38,26 @@ thread_local! {
 const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
 pub(crate) const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
 
-/// Per-community state of the apply step, valid while `stamp` is the current group's id.
+/// Fixed-point scale of the OrderFree rule's totals: integer sums are exact and associative, so
+/// a GPU can form them with atomics in any order and get the CPU's bits. 2^24 keeps totals
+/// (2m <= ~5e8) below 2^53, so the f64 view `fx` is exact.
+pub(crate) const FX: f64 = 16_777_216.0;
+
+pub(crate) fn to_fx(k: f64) -> i64 {
+    (k * FX).round() as i64
+}
+
+pub(crate) fn fx(x: i64) -> f64 {
+    x as f64 / FX
+}
+
+/// Per-community state of the OrderFree apply step (fixed point), valid while `stamp` is the
+/// current group's id.
 #[derive(Clone, Copy, Default)]
 struct ApplyState {
-    tot0: f64, // total at the group's start
-    inc: f64,  // weight of this group's proposals into it, so far (group order)
-    outg: f64, // weight of this group's proposals out of it, so far
+    tot0: i64, // total at the group's start
+    inc: i64,  // weight of this group's proposals into it, so far (group order)
+    outg: i64, // weight of this group's proposals out of it, so far
     size0: u32,
     outc: u32, // number of proposals out of it, so far
     stamp: u32,
@@ -209,6 +223,17 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
         tot[comm[v] as usize] += g.strength[v];
         size[comm[v] as usize] += 1;
     }
+    // OrderFree: totals in fixed point (`tot` is then their f64 view, what the decide step reads)
+    let kint: Vec<i64> = if apply == Apply::OrderFree { g.strength.iter().map(|&k| to_fx(k)).collect() } else { Vec::new() };
+    let mut tot_int = vec![0i64; if apply == Apply::OrderFree { ids } else { 0 }];
+    if apply == Apply::OrderFree {
+        for v in 0..n {
+            tot_int[comm[v] as usize] += kint[v];
+        }
+        for (t, &ti) in tot.iter_mut().zip(&tot_int) {
+            *t = fx(ti);
+        }
+    }
     // per community, lazily reset per group (generation stamp): proposal prefix sums in group
     // order, and the totals and sizes frozen at the group's start
     // (one struct per community: the apply step touches all fields of a community together, so
@@ -245,11 +270,7 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     })
                 })
                 .collect();
-            // Apply. A move is accepted against the frozen totals, made pessimistic by every
-            // *earlier proposal* of this group (group order): the target counts all proposals into
-            // it, the source loses all proposals out of it. Only prefix sums over proposals, so no
-            // accept depends on another accept: parallel-friendly (a GPU does it with a stable
-            // sort and per-community scans in the same order) and bit-identical either way.
+            // Apply (see crate::Apply).
             moved.clear();
             if apply == Apply::Sequential {
                 // apply, in order, re-checking the gain against the totals as they are now
@@ -274,35 +295,41 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     moved.push(v as u32);
                 }
             } else {
-                // One pass: acceptance reads the frozen snapshot plus the prefixes, while the live
-                // totals update per community in group order.
+                // OrderFree (rule C): a move is accepted against the totals frozen at the group's
+                // start, made pessimistic by every *earlier proposal* of the group (group order):
+                // the target counts all proposals into it, the source loses all proposals out of
+                // it. Totals and prefixes are fixed-point integers, so each is a function of a
+                // *set* of proposals, not of an order: a GPU forms them with atomics and walks of
+                // unordered per-community lists, and gets these bits. One pass here: acceptance
+                // reads the frozen snapshot plus the prefixes, the live totals update as we go.
                 gid += 1;
                 for m in &moves {
-                    let (v, k) = (m.v as usize, g.strength[m.v as usize]);
+                    let (v, k, kv) = (m.v as usize, g.strength[m.v as usize], kint[m.v as usize]);
                     let from = comm[v] as usize;
                     let to = if m.to == NEW { n + v } else { m.to as usize };
                     for x in [from, to] {
                         if cs[x].stamp != gid {
-                            cs[x] = ApplyState { stamp: gid, tot0: tot[x], size0: size[x], ..Default::default() };
+                            cs[x] = ApplyState { stamp: gid, tot0: tot_int[x], size0: size[x], ..Default::default() };
                         }
                     }
                     let (f, t) = (cs[from], cs[to]);
-                    let stay = m.w_from - scale * k * (f.tot0 - k - f.outg);
+                    let stay = m.w_from - scale * k * fx(f.tot0 - kv - f.outg);
                     let (ok, go) = if m.to == NEW {
                         // a new community must be empty now and v must not be left alone already
                         (t.size0 == 0 && f.size0 - f.outc > 1 && 0.0 > stay, 0.0)
                     } else {
-                        let go = m.w_to - scale * k * (t.tot0 + t.inc);
+                        let go = m.w_to - scale * k * fx(t.tot0 + t.inc);
                         (go > stay, go)
                     };
-                    cs[to].inc += k;
-                    cs[from].outg += k;
+                    cs[to].inc += kv;
+                    cs[from].outg += kv;
                     cs[from].outc += 1;
                     if ok {
                         round_gain += go - stay;
-                        tot[from] -= k;
+                        tot_int[from] -= kv;
+                        tot_int[to] += kv;
+                        (tot[from], tot[to]) = (fx(tot_int[from]), fx(tot_int[to]));
                         size[from] -= 1;
-                        tot[to] += k;
                         size[to] += 1;
                         comm[v] = to as u32;
                         moved.push(v as u32);
