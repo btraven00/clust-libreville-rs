@@ -2,7 +2,7 @@ Package: clusterLibreville
 Title: Parallel and Deterministic Leiden Community Detection
 Version: 0.99.0
 Authors@R: person("btraven", email = "ben.uzh@proton.me", role = c("aut", "cre"))
-Description: A parallel and deterministic Leiden implementation of the
+Description: A parallel and deterministic implementation of the Leiden
     community detection algorithm (Traag, Waltman and van Eck 2019,
     <doi:10.1038/s41598-019-41695-z>) for large sparse graphs such as
     single-cell kNN and SNN graphs, implemented in Rust. The

@@ -3,7 +3,7 @@ name = "clust-libreville-rs"
 version = "0.0.1"
 edition = "2024"
 license = "MIT"
-description = "Parallel and deterministic Leiden implementation of the community detection algorithm"
+description = "Parallel and deterministic implementation of the Leiden community detection algorithm"
 publish = false
 # what a package (crates.io, the Python sdist) ships: the library only
 include = ["src/**/*.rs", "Cargo.toml", "LICENSE", "README.md"]

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cluster-libreville"
-description = "Parallel and deterministic Leiden implementation of the community detection algorithm"
+description = "Parallel and deterministic implementation of the Leiden community detection algorithm"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "btraven", email = "ben.uzh@proton.me" }]
