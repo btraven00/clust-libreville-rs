@@ -1162,6 +1162,16 @@ fn copy_u32(src: &[u32], dst: &mut [u32]) {
 }
 
 #[cube(launch_unchecked)]
+fn zero_i64(x: &mut [i64]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < x.len() {
+        x[s] = i64::new(0);
+        s += stride;
+    }
+}
+
+#[cube(launch_unchecked)]
 fn zero1(x: &mut [u32]) {
     if ABSOLUTE_POS == 0 {
         x[0] = 0;
@@ -1445,7 +1455,11 @@ impl Gpu {
         let (k0, k1, k2) = (0x9E37_79B9_7F4A_7C15u64, 0xBF58_476D_1CE4_E5B9u64, 0x94D0_49BB_1331_11EBu64);
         let h_comm = self.up(u32::as_bytes(comm));
         let (h_refd, h_cw, h_size, h_ext) = (c.empty(n * 4), c.empty(n * 8), c.empty(n * 4), c.empty(n * 8));
-        let h_ks = self.up(i64::as_bytes(&vec![0i64; n]));
+        let h_ks = c.empty(n * 8);
+        {
+            let (zc, zd) = Self::grid(n.min(GRID_CAP));
+            unsafe { zero_i64::launch_unchecked(c, zc, zd, arg(&h_ks, n)) };
+        }
         let mg = lens.iter().copied().max().unwrap_or(1).max(1) as usize;
         let (o_to, o_w, o_ext, h_next, h_acc) = (c.empty(mg * 4), c.empty(mg * 8), c.empty(mg * 8), c.empty(mg * 4), c.empty(mg * 4));
         let (h_hubs, h_hub_count, h_heads) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])), c.empty(n * 4));
