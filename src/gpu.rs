@@ -1084,7 +1084,7 @@ fn ag_cap(offsets: &[u32], labels: &[u32], cap: &[Atomic<u32>]) {
 
 #[cube(launch_unchecked)]
 fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap_off: &[u32], keys: &[Atomic<u32>],
-             vals: &[Atomic<u32>], cnt: &[Atomic<u32>]) {
+             vals: &[Atomic<u32>]) {
     let v = ABSOLUTE_POS;
     if v < labels.len() {
         let r = labels[v] as usize;
@@ -1095,16 +1095,16 @@ fn ag_insert(offsets: &[u32], targets: &[u32], wint: &[i64], labels: &[u32], cap
             let mut slot = u32::cast_from((u64::cast_from(c) * 0x9E37_79B1u64) % u64::cast_from(cap));
             let mut done = false;
             while !done {
-                // ponytail: CUDA's CAS is strong; a weak CAS that fails spuriously (allowed on
-                // Metal/WGSL) would drop a column. Re-check before the Metal test.
-                let old = keys[(base + slot) as usize].compare_exchange_weak(NONE, c);
-                if old == NONE || old == c {
+                // a weak CAS (Metal, WGSL) may fail spuriously and still return NONE: read the slot
+                // back. c: ours (inserted now or before); NONE: retry this slot; else probe on.
+                let mut old = keys[(base + slot) as usize].compare_exchange_weak(NONE, c);
+                if old == NONE {
+                    old = keys[(base + slot) as usize].load();
+                }
+                if old == c {
                     add64(vals, (base + slot) as usize, wint[e]);
-                    if old == NONE {
-                        cnt[r].fetch_add(1u32);
-                    }
                     done = true;
-                } else {
+                } else if old != NONE {
                     slot += 1;
                     if slot == cap {
                         slot = 0;
@@ -1230,6 +1230,19 @@ fn ag_clear(keys: &mut [u32], vals: &mut [i64]) {
     while s < keys.len() {
         keys[s] = NONE;
         vals[s] = i64::new(0);
+        s += stride;
+    }
+}
+
+/// Distinct columns per row: the filled slots of its table.
+#[cube(launch_unchecked)]
+fn ag_count(cap_off: &[u32], nrows: u32, keys: &[u32], cnt: &[Atomic<u32>]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < keys.len() {
+        if keys[s] != NONE {
+            cnt[row_of(cap_off, nrows, s as u32) as usize].fetch_add(1u32);
+        }
         s += stride;
     }
 }
@@ -1445,7 +1458,8 @@ impl Gpu {
         unsafe {
             ag_clear::launch_unchecked(c, sc.clone(), sd.clone(), arg(&h_keys, slots), arg(&h_vals, slots));
             ag_insert::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&h_labels, n),
-                arg(&h_cap_off, nl + 1), arg(&h_keys, slots), arg(&h_vals, 2 * slots), arg(&h_cnt, nl));
+                arg(&h_cap_off, nl + 1), arg(&h_keys, slots), arg(&h_vals, 2 * slots));
+            ag_count::launch_unchecked(c, sc.clone(), sd.clone(), arg(&h_cap_off, nl + 1), nl as u32, arg(&h_keys, slots), arg(&h_cnt, nl));
         }
         let cnt = u32::from_bytes(&c.read_one(h_cnt).unwrap()).to_vec();
         if cnt.iter().any(|&k| k as usize > AG_MAX_ROW) {
