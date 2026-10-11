@@ -6,13 +6,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         # nolint start\n\
         \n\
         #' @usage NULL\n\
-        #' @useDynLib detleiden, .registration = TRUE\n\
+        #' @useDynLib clusterLibreville, .registration = TRUE\n\
         NULL\n\
         \n\
     ";
     let footer = "# nolint end\n";
-    let wrappers = detleiden::get_detleiden_metadata()
-        .make_r_wrappers(true, "detleiden")
+    let wrappers = clusterLibreville::get_clusterLibreville_metadata()
+        .make_r_wrappers(true, "clusterLibreville")
         .map_err(|e| format!("failed to generate wrappers: {e}"))?;
     std::fs::write(wrapper_path, format!("{header}{wrappers}{footer}"))
         .map_err(|e| format!("failed to write {wrapper_path}: {e}"))?;

@@ -46,11 +46,11 @@ Leiden (Traag, Waltman & van Eck 2019) maximising modularity at resolution
 labels at any number of threads.
 }
 \examples{
-f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 g <- Matrix::readMM(f)
 labels <- leiden(g, resolution = 1, seed = 0)
 table(labels)
 }
 \seealso{
-\code{\link[=cluster_detleiden]{cluster_detleiden()}} for igraph and bluster.
+\code{\link[=cluster_libreville]{cluster_libreville()}} for igraph and bluster.
 }

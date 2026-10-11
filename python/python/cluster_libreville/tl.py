@@ -1,4 +1,4 @@
-"""scanpy-style tools: ``detleiden.tl.leiden(adata, ...)`` mirrors ``scanpy.tl.leiden``."""
+"""scanpy-style tools: ``cluster_libreville.tl.leiden(adata, ...)`` mirrors ``scanpy.tl.leiden``."""
 
 from __future__ import annotations
 
@@ -34,5 +34,5 @@ def leiden(adata, resolution: float = 1.0, *, random_state: int = 0, key_added: 
     adata.obs[key_added] = pd.Categorical.from_codes(labels, categories=[str(c) for c in range(k)])
     adata.uns[key_added] = {"params": {"resolution": resolution, "random_state": random_state,
                                        "n_iterations": n_iterations, "theta": theta, "min_gain": min_gain,
-                                       "flavor": "detleiden"}}
+                                       "flavor": "cluster-libreville"}}
     return adata if copy else None

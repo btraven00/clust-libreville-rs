@@ -1,4 +1,4 @@
-//! Python bindings for detleiden (PyO3). python/detleiden/__init__.py normalises inputs to a
+//! Python bindings for clust-libreville-rs (PyO3). python/cluster_libreville/__init__.py normalises inputs to a
 //! symmetric CSR (int64 indptr, int32 indices, float64 weights); labels come back as int32.
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};

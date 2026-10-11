@@ -1,9 +1,9 @@
 [package]
-name = "detleiden-py"
+name = "cluster-libreville-py"
 version = "0.0.1"
 edition = "2021"
 publish = false
-description = "Python bindings for detleiden"
+description = "Python bindings for clust-libreville-rs"
 license = "MIT"
 
 [lib]

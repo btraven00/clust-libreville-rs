@@ -1,7 +1,7 @@
 TARGET_DIR = ./rust/target
 LIBDIR = $(TARGET_DIR)/@LIBDIR@
-STATLIB = $(LIBDIR)/libdetleiden.a
-PKG_LIBS = -L$(LIBDIR) -ldetleiden
+STATLIB = $(LIBDIR)/libclusterLibreville.a
+PKG_LIBS = -L$(LIBDIR) -lclusterLibreville
 
 all: $(SHLIB) rust_clean
 

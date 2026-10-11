@@ -33,9 +33,9 @@
 #'   result.
 #' @return Integer community labels `1..k`, community 1 the largest (ties: by
 #'   smallest vertex), named by the graph's row names if it has them.
-#' @seealso [cluster_detleiden()] for igraph and bluster.
+#' @seealso [cluster_libreville()] for igraph and bluster.
 #' @examples
-#' f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+#' f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 #' g <- Matrix::readMM(f)
 #' labels <- leiden(g, resolution = 1, seed = 0)
 #' table(labels)
@@ -62,7 +62,7 @@ leiden <- function(graph, resolution = 1, seed = 0, n_iterations = -1L,
 #' @param membership Labels, one per vertex (any atomic type).
 #' @return A number.
 #' @examples
-#' f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+#' f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 #' g <- Matrix::readMM(f)
 #' modularity(g, leiden(g))
 #' @export
@@ -78,7 +78,7 @@ modularity <- function(graph, membership, resolution = 1) {
 #' [leiden()] with igraph's `cluster_*()` interface: it returns an igraph
 #' `communities` object, so it plugs into igraph and into bluster's graph
 #' clustering, e.g.
-#' `bluster::clusterRows(pcs, SNNGraphParam(cluster.fun = cluster_detleiden))`.
+#' `bluster::clusterRows(pcs, SNNGraphParam(cluster.fun = cluster_libreville))`.
 #'
 #' @param graph An undirected igraph graph (edge attribute `weight` if
 #'   present).
@@ -89,16 +89,16 @@ modularity <- function(graph, membership, resolution = 1) {
 #' @examples
 #' if (requireNamespace("igraph", quietly = TRUE)) {
 #'     g <- igraph::make_graph("Zachary")
-#'     comm <- cluster_detleiden(g, seed = 1)
+#'     comm <- cluster_libreville(g, seed = 1)
 #'     igraph::sizes(comm)
 #' }
 #' @export
-cluster_detleiden <- function(graph, ...) {
+cluster_libreville <- function(graph, ...) {
     if (!requireNamespace("igraph", quietly = TRUE)) {
-        stop("cluster_detleiden() needs the igraph package")
+        stop("cluster_libreville() needs the igraph package")
     }
     labels <- leiden(graph, ...)
     igraph::make_clusters(graph, membership = unname(labels),
-                            algorithm = "detleiden",
+                            algorithm = "clusterLibreville",
                             modularity = modularity(graph, labels))
 }

@@ -1,5 +1,6 @@
-//! R bindings for detleiden (extendr). The R wrapper (R/leiden.R) converts inputs to a general
+//! R bindings for clust-libreville-rs (extendr). The R wrapper (R/leiden.R) converts inputs to a general
 //! dgCMatrix; for a symmetric matrix its CSC arrays (p / i / x) are a CSR. Labels go back 1-based.
+#![allow(non_snake_case)] // the lib is named after the R package (R_init_clusterLibreville)
 
 use extendr_api::prelude::*;
 
@@ -35,7 +36,7 @@ fn modularity_rs(p: &[i32], i: &[i32], x: &[f64], membership: &[i32], resolution
 }
 
 extendr_module! {
-    mod detleiden;
+    mod clusterLibreville;
     fn leiden_rs;
     fn modularity_rs;
 }

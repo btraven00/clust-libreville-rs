@@ -3,8 +3,8 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "detleiden"
-description = "Seeded, deterministic, parallel Leiden community detection: the same labels for the same seed at any thread count"
+name = "cluster-libreville"
+description = "Parallel and deterministic Leiden implementation of the community detection algorithm"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "btraven", email = "ben.uzh@proton.me" }]
@@ -24,5 +24,5 @@ test = ["pytest", "scipy"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "detleiden._core"
+module-name = "cluster_libreville._core"
 features = ["pyo3/extension-module"]

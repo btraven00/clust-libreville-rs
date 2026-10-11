@@ -20,7 +20,7 @@ planted <- function(k = 8, s = 60, p_in = 0.2, p_out = 0.005) {
 
 ## the shared known-answer fixture (inst/extdata, from tests/fixtures)
 hao3k <- function() {
-    f <- function(x) system.file("extdata", x, package = "detleiden")
+    f <- function(x) system.file("extdata", x, package = "clusterLibreville")
     list(graph = Matrix::readMM(f("hao3k.mtx")),
             cases = utils::read.delim(f("hao3k_cases.tsv"),
                                     stringsAsFactors = FALSE),

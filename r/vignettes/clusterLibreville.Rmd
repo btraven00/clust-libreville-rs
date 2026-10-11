@@ -1,10 +1,10 @@
 ---
-title: "Deterministic Leiden clustering with detleiden"
+title: "Deterministic Leiden clustering with clusterLibreville"
 author: "btraven"
 date: "`r Sys.Date()`"
 output: BiocStyle::html_document
 vignette: >
-    %\VignetteIndexEntry{Deterministic Leiden clustering with detleiden}
+    %\VignetteIndexEntry{Deterministic Leiden clustering with clusterLibreville}
     %\VignetteEngine{knitr::rmarkdown}
     %\VignetteEncoding{UTF-8}
 ---
@@ -20,7 +20,7 @@ bioc <- has("bluster") && has("SingleCellExperiment")
 Leiden clustering of a cell-cell neighbour graph is a standard step of
 single-cell analysis. Most implementations are either sequential or, when
 parallel, nondeterministic: the labels change with the number of threads.
-`detleiden` is a parallel Leiden whose result depends only on the graph, the
+`clusterLibreville` is a parallel Leiden whose result depends only on the graph, the
 options and the seed. The same seed gives the same labels on a laptop and on
 a many-core server.
 
@@ -30,7 +30,7 @@ a many-core server.
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
     install.packages("BiocManager")
 }
-BiocManager::install("detleiden")
+BiocManager::install("clusterLibreville")
 ```
 
 Building from source needs a Rust toolchain (`cargo`, `rustc >= 1.85`).
@@ -41,8 +41,8 @@ The package ships a small real graph: scanpy kNN connectivities of 3000
 PBMCs (Hao et al. 2021), as a symmetric sparse matrix.
 
 ```{r graph}
-library(detleiden)
-f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+library(clusterLibreville)
+f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 g <- Matrix::readMM(f)
 dim(g)
 ```
@@ -85,11 +85,11 @@ colLabels(sce) <- factor(leiden(snn, seed = 1))
 table(colLabels(sce))
 ```
 
-`cluster_detleiden()` has igraph's community-function interface, so it plugs
+`cluster_libreville()` has igraph's community-function interface, so it plugs
 into bluster's graph-based clustering:
 
 ```{r bluster, eval = bioc}
-param <- bluster::SNNGraphParam(k = 10, cluster.fun = cluster_detleiden,
+param <- bluster::SNNGraphParam(k = 10, cluster.fun = cluster_libreville,
                                 cluster.args = list(resolution = 1, seed = 1))
 table(bluster::clusterRows(pcs, param))
 ```

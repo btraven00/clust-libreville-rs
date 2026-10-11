@@ -2,7 +2,7 @@
 # nolint start
 
 #' @usage NULL
-#' @useDynLib detleiden, .registration = TRUE
+#' @useDynLib clusterLibreville, .registration = TRUE
 NULL
 
 #' @keywords internal

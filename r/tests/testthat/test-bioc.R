@@ -1,21 +1,21 @@
-test_that("cluster_detleiden is an igraph communities function", {
+test_that("cluster_libreville is an igraph communities function", {
     skip_if_not_installed("igraph")
     m <- planted()
     g <- igraph::graph_from_adjacency_matrix(m, mode = "undirected",
                                                 weighted = TRUE)
-    comm <- cluster_detleiden(g, seed = 4)
+    comm <- cluster_libreville(g, seed = 4)
     expect_s3_class(comm, "communities")
     expect_identical(as.integer(igraph::membership(comm)), leiden(m, seed = 4))
     expect_equal(igraph::modularity(comm),
                     modularity(m, igraph::membership(comm)))
 })
 
-test_that("bluster: SNNGraphParam(cluster.fun = cluster_detleiden)", {
+test_that("bluster: SNNGraphParam(cluster.fun = cluster_libreville)", {
     skip_if_not_installed("bluster")
     set.seed(1)
     pcs <- rbind(matrix(rnorm(400, 0), ncol = 4),
                     matrix(rnorm(400, 6), ncol = 4))
-    p <- bluster::SNNGraphParam(cluster.fun = cluster_detleiden,
+    p <- bluster::SNNGraphParam(cluster.fun = cluster_libreville,
                                 cluster.args = list(seed = 2))
     cl <- bluster::clusterRows(pcs, p)
     expect_s3_class(cl, "factor")

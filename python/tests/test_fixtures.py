@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import detleiden
+import cluster_libreville as cl
 
 FIX = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 pytestmark = pytest.mark.skipif(not (FIX / "hao3k.mtx").exists(), reason="fixtures live in the source repository")
@@ -33,10 +33,10 @@ def test_known_answers(hao3k, case):
     kw = dict(seed=int(case["seed"]), resolution=float(case["resolution"]), n_iterations=int(case["n_iterations"]),
               theta=float(case["theta"]), min_gain=float(case["min_gain"]))
     for threads in (1, 4):
-        assert np.array_equal(detleiden.leiden(g, threads=threads, **kw), want[case["name"]])
+        assert np.array_equal(cl.leiden(g, threads=threads, **kw), want[case["name"]])
     # the same graph as an edge list and as float32 (scanpy's dtype; these weights are f32-exact)
     u = g.tocoo()
     keep = u.row <= u.col
-    assert np.array_equal(detleiden.leiden_edges(u.row[keep], u.col[keep], u.data[keep], n=g.shape[0], **kw),
+    assert np.array_equal(cl.leiden_edges(u.row[keep], u.col[keep], u.data[keep], n=g.shape[0], **kw),
                           want[case["name"]])
-    assert np.array_equal(detleiden.leiden(g.astype(np.float32), **kw), want[case["name"]])
+    assert np.array_equal(cl.leiden(g.astype(np.float32), **kw), want[case["name"]])

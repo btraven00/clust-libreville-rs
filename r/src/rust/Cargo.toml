@@ -1,5 +1,5 @@
 [package]
-name = 'detleidenr'
+name = 'cluster-libreville-r'
 publish = false
 version = '0.1.0'
 edition = '2021'
@@ -7,7 +7,7 @@ rust-version = '1.85'
 
 [lib]
 crate-type = [ 'rlib', 'staticlib' ]
-name = 'detleiden' # R_init_detleiden: the R package's name
+name = 'clusterLibreville' # R_init_clusterLibreville: the R package's name
 
 [[bin]]
 name = 'document'

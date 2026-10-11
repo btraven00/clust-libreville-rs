@@ -25,7 +25,7 @@ Newman's modularity at resolution \code{resolution}, summed in a fixed order
 (the quantity \code{\link[=leiden]{leiden()}} maximises).
 }
 \examples{
-f <- system.file("extdata", "hao3k.mtx", package = "detleiden")
+f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 g <- Matrix::readMM(f)
 modularity(g, leiden(g))
 }

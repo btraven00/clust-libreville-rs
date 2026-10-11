@@ -1,3 +1,3 @@
 library(testthat)
-library(detleiden)
-test_check("detleiden")
+library(clusterLibreville)
+test_check("clusterLibreville")

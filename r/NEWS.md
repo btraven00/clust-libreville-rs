@@ -1,4 +1,4 @@
-# detleiden 0.99.0
+# clusterLibreville 0.99.0
 
 * Initial Bioconductor submission: `leiden()`, `modularity()` and
-  `cluster_detleiden()` (igraph / bluster interface).
+  `cluster_libreville()` (igraph / bluster interface).
