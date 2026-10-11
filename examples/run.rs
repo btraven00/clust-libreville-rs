@@ -1,4 +1,4 @@
-//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--apply sequential|orderfree] [--repeat R] [--out LABELS.npy]
+//! cargo run --release --example run -- GRAPH.npz [--seed S] [--theta T] [--niter N] [--threads T] [--tol E] [--min-gain G] [--apply sequential|orderfree] [--repeat R] [--gpu] [--out LABELS.npy]
 //! GRAPH.npz: full symmetric CSR (indptr, indices, data), as bench/py/export_graph.py writes it.
 //! Prints one line: n, time_s (fastest leiden() call, the "algo only" time), median_s and times (every call, in order),
 //! build_s (Graph::from_csr), clusters, modularity. LABELS.npy: int64, graph row order.
@@ -33,10 +33,11 @@ fn main() {
 
     // --repeat R: R calls in this process; fastest, median and all of them (no call is discarded as warm-up)
     let repeat: usize = flag("--repeat").map_or(1, |s| s.parse().unwrap());
+    let gpu = args.iter().any(|a| a == "--gpu"); // leiden_gpu (needs a gpu-* feature)
     let (mut labels, mut times) = (Vec::new(), Vec::new());
     for _ in 0..repeat {
         let t = Instant::now();
-        labels = leiden(&g, &o);
+        labels = if gpu { gpu_leiden(&g, &o) } else { leiden(&g, &o) };
         times.push(t.elapsed().as_secs_f64());
     }
     let mut sorted = times.clone();
@@ -50,4 +51,13 @@ fn main() {
         let v: Vec<i64> = labels.iter().map(|&x| x as i64).collect();
         npyz::to_file_1d(&path, v).expect("write npy");
     }
+}
+
+#[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
+fn gpu_leiden(g: &Graph, o: &detleiden::Options) -> Vec<u32> {
+    detleiden::leiden_gpu(g, o)
+}
+#[cfg(not(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal")))]
+fn gpu_leiden(_: &Graph, _: &detleiden::Options) -> Vec<u32> {
+    panic!("--gpu needs a build with --features gpu-cuda, gpu-metal or gpu-wgpu")
 }
