@@ -1,6 +1,6 @@
 //! Phase 2's gate: nothing, not even a last bit of a coarse weight, depends on the thread count.
 
-use detleiden::{leiden_traced, Graph, Options};
+use detleiden::{leiden_traced, Apply, Graph, Options};
 
 mod common;
 use common::{graph, planted};
@@ -28,7 +28,9 @@ fn random_graphs() {
         let g = graph(n, &e);
         for theta in [0.01, 0.0] {
             for n_iterations in [1, -1] {
-                same_at_every_thread_count(&g, &Options { seed, theta, n_iterations, ..Default::default() });
+                for apply in [Apply::Sequential, Apply::OrderFree] {
+                    same_at_every_thread_count(&g, &Options { seed, theta, n_iterations, apply, ..Default::default() });
+                }
             }
         }
     }
@@ -49,19 +51,23 @@ fn load(name: &str) -> Option<Graph> {
 }
 
 /// The hao2021 graphs (bench/graphs, git-ignored): every thread count, and the locked labels
-/// exactly (phase 1, 4783e5d; re-locked for the order-free apply rule, option C: 50k/100k seed
-/// 101 changed, the rest identical). `cargo test --release -- --ignored`
+/// exactly. Sequential: phase 1 (4783e5d) and every output-preserving change since. OrderFree
+/// (rule C, 76547a9): differs from Sequential on 50k/100k seed 101 only.
+/// `cargo test --release -- --ignored`
 #[test]
 #[ignore]
 fn hao2021_matches_lock_at_every_thread_count() {
     let lock = [
-        ("hao2021_10k", 100, 0x87ded254a27d8377u64), ("hao2021_10k", 101, 0x927306921a2dcc27),
-        ("hao2021_50k", 100, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, 0x77b396f3ffb7f00f),
-        ("hao2021_100k", 100, 0x7ec81e3557da7095), ("hao2021_100k", 101, 0x30f4d82485c5536a),
+        ("hao2021_10k", 100, Apply::Sequential, 0x87ded254a27d8377u64), ("hao2021_10k", 101, Apply::Sequential, 0x927306921a2dcc27),
+        ("hao2021_50k", 100, Apply::Sequential, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, Apply::Sequential, 0x6cd3a3991e9d2160),
+        ("hao2021_100k", 100, Apply::Sequential, 0x7ec81e3557da7095), ("hao2021_100k", 101, Apply::Sequential, 0x12c848f6a5f824ac),
+        ("hao2021_10k", 100, Apply::OrderFree, 0x87ded254a27d8377), ("hao2021_10k", 101, Apply::OrderFree, 0x927306921a2dcc27),
+        ("hao2021_50k", 100, Apply::OrderFree, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, Apply::OrderFree, 0x77b396f3ffb7f00f),
+        ("hao2021_100k", 100, Apply::OrderFree, 0x7ec81e3557da7095), ("hao2021_100k", 101, Apply::OrderFree, 0x30f4d82485c5536a),
     ];
-    for (name, seed, want) in lock {
+    for (name, seed, apply, want) in lock {
         let Some(g) = load(name) else { eprintln!("skip {name}: no graph"); continue };
-        let (labels, _) = same_at_every_thread_count(&g, &Options { seed, ..Default::default() });
-        assert_eq!(fnv(&labels), want, "{name} seed {seed}: not the phase-1 labels");
+        let (labels, _) = same_at_every_thread_count(&g, &Options { seed, apply, ..Default::default() });
+        assert_eq!(fnv(&labels), want, "{name} seed {seed} {apply:?}: not the locked labels");
     }
 }

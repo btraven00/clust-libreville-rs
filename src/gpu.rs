@@ -260,6 +260,7 @@ use cubecl::server::Handle;
 use crate::backend::{Backend, Cpu};
 use crate::graph::{Csr, Weight};
 use crate::moving::{self, Move, NEW};
+use crate::Apply;
 
 /// Below this many vertices local moving stays on the CPU (launch and sync overheads win).
 const GPU_MIN_N: usize = 50_000;
@@ -469,13 +470,15 @@ impl Backend for Gpu {
     fn hash<W: Weight>(&self, g: &Self::Graph<'_, W>) -> u64 {
         g.host.hash()
     }
-    fn move_nodes<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &mut [u32], gamma: f64, tol: f64, seed: u64, step: u64) -> (usize, usize) {
+    fn move_nodes<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &mut [u32], gamma: f64, tol: f64, seed: u64, step: u64, apply: Apply) -> (usize, usize) {
+        // the device loop applies sequentially on the host (Apply::Sequential); OrderFree runs
+        // on the CPU until rule C runs on the device
         match &g.dev {
-            Some(d) => {
+            Some(d) if apply == Apply::Sequential => {
                 debug_assert_eq!(d.n, g.host.n());
                 self.move_nodes_dev(&g.host, d, comm, gamma, tol, seed, step)
             }
-            None => Cpu.move_nodes(&g.host, comm, gamma, tol, seed, step),
+            _ => Cpu.move_nodes(&g.host, comm, gamma, tol, seed, step, apply),
         }
     }
     fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64) -> (Vec<u32>, usize) {

@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use rayon::prelude::*;
 
 use crate::graph::{Csr, Weight};
+use crate::Apply;
 use crate::rng;
 
 const MIN_LEN: usize = 64; // vertices per rayon task; any value gives the same output. 64 beat 256 by 7-10% (100k-1M, 8 threads): per-vertex work is uneven
@@ -189,15 +190,21 @@ fn colour_parallel<W: Weight>(g: &Csr<W>, order: &[u32]) -> Vec<Vec<u32>> {
 /// resolution `gamma`. Stops when a round moves nothing, or when its modularity gain (summed in
 /// apply order) is at most `tol` (GVE-Leiden's convergence rule; 0: until nothing moves).
 /// Returns (colours, rounds) for the trace.
-pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, tol: f64, groups: &[Vec<u32>]) -> (usize, usize) {
+///
+/// `apply` chooses how a group's decided moves are applied (`crate::Apply`): `Sequential` (the
+/// CPU fast path, in-order re-check against the live totals) or `OrderFree` (rule C: what a GPU
+/// can reproduce in parallel; selecting it on the CPU gives the GPU's labels).
+pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, tol: f64, groups: &[Vec<u32>], apply: Apply) -> (usize, usize) {
     let n = g.n();
     if n == 0 || g.total <= 0.0 {
         return (0, 0);
     }
     let scale = gamma / g.total;
-    // community ids < 2n: a vertex v that leaves for a new community takes id n + v
-    let mut tot = vec![0.0f64; 2 * n];
-    let mut size = vec![0u32; 2 * n];
+    // community ids: < n (Sequential: an empty-community stack); < 2n (OrderFree: a vertex v
+    // that leaves for a new community takes id n + v)
+    let ids = if apply == Apply::OrderFree { 2 * n } else { n };
+    let mut tot = vec![0.0f64; ids];
+    let mut size = vec![0u32; ids];
     for v in 0..n {
         tot[comm[v] as usize] += g.strength[v];
         size[comm[v] as usize] += 1;
@@ -206,8 +213,9 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
     // order, and the totals and sizes frozen at the group's start
     // (one struct per community: the apply step touches all fields of a community together, so
     // this is one cache line instead of six)
-    let mut cs = vec![ApplyState::default(); 2 * n];
+    let mut cs = vec![ApplyState::default(); if apply == Apply::OrderFree { ids } else { 0 }];
     let mut gid = 0u32;
+    let mut empty: Vec<u32> = if apply == Apply::Sequential { (0..n as u32).rev().filter(|&c| size[c as usize] == 0).collect() } else { Vec::new() };
 
 
     let affected: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(true)).collect();
@@ -230,8 +238,8 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     }
                     SCRATCH.with(|s| {
                         let (wt, touched) = &mut *s.borrow_mut();
-                        if wt.len() < 2 * n {
-                            wt.resize(2 * n, 0.0); // community ids < 2n
+                        if wt.len() < ids {
+                            wt.resize(ids, 0.0);
                         }
                         best_move(g, v, frozen, &tot, &size, scale, wt, touched)
                     })
@@ -242,39 +250,63 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
             // it, the source loses all proposals out of it. Only prefix sums over proposals, so no
             // accept depends on another accept: parallel-friendly (a GPU does it with a stable
             // sort and per-community scans in the same order) and bit-identical either way.
-            // One pass: acceptance reads the frozen snapshot plus the prefixes, while the live
-            // totals update per community in group order.
-            gid += 1;
             moved.clear();
-            for m in &moves {
-                let (v, k) = (m.v as usize, g.strength[m.v as usize]);
-                let from = comm[v] as usize;
-                let to = if m.to == NEW { n + v } else { m.to as usize };
-                for x in [from, to] {
-                    if cs[x].stamp != gid {
-                        cs[x] = ApplyState { stamp: gid, tot0: tot[x], size0: size[x], ..Default::default() };
+            if apply == Apply::Sequential {
+                // apply, in order, re-checking the gain against the totals as they are now
+                for m in &moves {
+                    let (v, k) = (m.v as usize, g.strength[m.v as usize]);
+                    let from = comm[v] as usize;
+                    let stay = m.w_from - scale * k * (tot[from] - k);
+                    let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * tot[m.to as usize] };
+                    if go <= stay || (m.to == NEW && size[from] == 1) {
+                        continue; // no longer an improvement, or already alone
                     }
-                }
-                let (f, t) = (cs[from], cs[to]);
-                let stay = m.w_from - scale * k * (f.tot0 - k - f.outg);
-                let (ok, go) = if m.to == NEW {
-                    // a new community must be empty now and v must not be left alone already
-                    (t.size0 == 0 && f.size0 - f.outc > 1 && 0.0 > stay, 0.0)
-                } else {
-                    let go = m.w_to - scale * k * (t.tot0 + t.inc);
-                    (go > stay, go)
-                };
-                cs[to].inc += k;
-                cs[from].outg += k;
-                cs[from].outc += 1;
-                if ok {
                     round_gain += go - stay;
+                    let to = if m.to == NEW { empty.pop().expect("an empty community exists while one has 2+ members") } else { m.to } as usize;
                     tot[from] -= k;
                     size[from] -= 1;
+                    if size[from] == 0 {
+                        empty.push(from as u32);
+                    }
                     tot[to] += k;
                     size[to] += 1;
                     comm[v] = to as u32;
                     moved.push(v as u32);
+                }
+            } else {
+                // One pass: acceptance reads the frozen snapshot plus the prefixes, while the live
+                // totals update per community in group order.
+                gid += 1;
+                for m in &moves {
+                    let (v, k) = (m.v as usize, g.strength[m.v as usize]);
+                    let from = comm[v] as usize;
+                    let to = if m.to == NEW { n + v } else { m.to as usize };
+                    for x in [from, to] {
+                        if cs[x].stamp != gid {
+                            cs[x] = ApplyState { stamp: gid, tot0: tot[x], size0: size[x], ..Default::default() };
+                        }
+                    }
+                    let (f, t) = (cs[from], cs[to]);
+                    let stay = m.w_from - scale * k * (f.tot0 - k - f.outg);
+                    let (ok, go) = if m.to == NEW {
+                        // a new community must be empty now and v must not be left alone already
+                        (t.size0 == 0 && f.size0 - f.outc > 1 && 0.0 > stay, 0.0)
+                    } else {
+                        let go = m.w_to - scale * k * (t.tot0 + t.inc);
+                        (go > stay, go)
+                    };
+                    cs[to].inc += k;
+                    cs[from].outg += k;
+                    cs[from].outc += 1;
+                    if ok {
+                        round_gain += go - stay;
+                        tot[from] -= k;
+                        size[from] -= 1;
+                        tot[to] += k;
+                        size[to] += 1;
+                        comm[v] = to as u32;
+                        moved.push(v as u32);
+                    }
                 }
             }
             round_moves += moved.len();

@@ -18,6 +18,20 @@ pub use graph::Graph;
 use backend::{Backend, Cpu};
 use graph::{Csr, Repr, Weight};
 
+/// How local moving applies the moves decided (in parallel) for a colour group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Apply {
+    /// In order, each re-checked against the totals as they are after the earlier moves: the
+    /// CPU fast path (default).
+    #[default]
+    Sequential,
+    /// Rule C: each accepted against the totals frozen at the group's start, made pessimistic by
+    /// all earlier proposals (prefix sums per community). Order-free, so a GPU reproduces it in
+    /// parallel bit for bit: the GPU backend uses it, and on the CPU it gives the GPU's labels.
+    /// Non-inferior to `Sequential` (PLAN.md); ~5% slower on the CPU.
+    OrderFree,
+}
+
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Modularity resolution γ.
@@ -35,6 +49,8 @@ pub struct Options {
     /// With `n_iterations < 0`: also stop when an iteration gains less than this modularity.
     /// 0 (default): strictly until an iteration changes nothing (comparable to igraph/leidenalg).
     pub min_gain: f64,
+    /// See [`Apply`].
+    pub apply: Apply,
     /// Worker threads; None: `RAYON_NUM_THREADS`, else `std::thread::available_parallelism()`
     /// (which respects cgroup quotas). The labels do not depend on it.
     pub threads: Option<usize>,
@@ -42,7 +58,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, min_gain: 0.0, threads: None }
+        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, min_gain: 0.0, apply: Apply::Sequential, threads: None }
     }
 }
 
@@ -146,7 +162,7 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
     }
     let t0 = std::time::Instant::now();
     let tol = o.tolerance / 10f64.powi(level as i32);
-    let (colours, rounds) = b.move_nodes(cur, comm, o.resolution, tol, o.seed, step);
+    let (colours, rounds) = b.move_nodes(cur, comm, o.resolution, tol, o.seed, step, o.apply);
     let (dcomm, n_comm) = refine::dense(comm);
     let move_s = t0.elapsed().as_secs_f64();
     if trace {
