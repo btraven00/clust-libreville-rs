@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """prof.py PROFILE.json.gz [top]  -- self time by innermost (inlined) function and by source line,
 from `samply record -s --unstable-presymbolicate -r 4000 -o PROFILE.json.gz -- cmd` (needs
-perf_event_paranoid <= 1). Reads the .json.syms.json sidecar next to the profile.
-from a samply recording made with --save-only --unstable-presymbolicate."""
+perf_event_paranoid <= 1). Reads the .json.syms.json sidecar next to the profile."""
 import bisect, gzip, json, sys
 from collections import Counter
 

@@ -4,7 +4,10 @@ Writes an sc-brrr-shaped member to bench/out/baselines/<graph>/<N>/ (N_clusters.
 
 igraph/igraph2/leidenalg: the scanpy env (sc.tl.leiden exactly as sc-brrr's baselines/reference.py calls it;
 n_iterations -1 / 2; leidenalg = scanpy 1.12's default flavor and arguments). gve: `cd $PHD/brrr-gve && pixi run python -I`,
-brrr-gve's own method.cluster; threads = OMP_NUM_THREADS. Times are the wall time of the cluster call alone (incl. igraph's graph build).
+brrr-gve's own method.cluster, with GVE built from bench/gve/leiden_timed.cxx (the same wrapper plus a clock);
+threads = OMP_NUM_THREADS. times: wall time of the cluster call (incl. igraph's / GVE's graph build).
+algo_times (gve only): leidenStaticOmp alone, excluding GVE's DiGraph build; comparable to detleiden's
+examples/run.rs time_s, which excludes Graph::from_csr.
 """
 import argparse
 import json
@@ -40,6 +43,23 @@ def write_member(d, name, ids, reps, params):
     (d / "parameters.json").write_text(json.dumps(params))
 
 
+def gve_timed():
+    """bench/gve/leiden_timed.cxx built like brrr-gve's method._gve (same compiler and flags), cached by source hash."""
+    import glob
+    import hashlib
+    import subprocess
+    src, inc = BENCH / "gve" / "leiden_timed.cxx", Path.home() / "phd" / "brrr-gve" / "gve"
+    key = hashlib.sha256(src.read_bytes() + b"".join(f.read_bytes() for f in sorted((inc / "inc").glob("*.hxx")))).hexdigest()[:12]
+    lib = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "detleiden" / f"gve-timed-{key}.so"
+    if not lib.exists():
+        cxx = os.environ.get("CXX") or next(iter(glob.glob(f"{sys.prefix}/bin/*-linux-gnu-c++")), "c++")
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        tmp = lib.with_suffix(f".{os.getpid()}.so")
+        subprocess.run([cxx, "-std=c++17", "-O3", "-fopenmp", "-shared", "-fPIC", f"-I{inc}", "-o", str(tmp), str(src)], check=True)
+        tmp.rename(lib)
+    return str(lib)
+
+
 def main():
     a = argparse.ArgumentParser()
     a.add_argument("--impl", required=True, choices=["igraph", "igraph2", "igraph-fix", "leidenalg", "gve"])
@@ -49,18 +69,21 @@ def main():
     a.add_argument("--replicates", type=int, default=20)
     a.add_argument("--seed_stride", type=int, default=1)
     a.add_argument("--order", default="input", choices=["input", "seed"])
-    a.add_argument("--gve_lib", help="gve: a scratch build of gve/leiden.cxx to use instead of brrr-gve's (ablations)")
+    a.add_argument("--gve_lib", help="gve: a scratch build of gve/leiden.cxx to use instead of bench/gve/leiden_timed.cxx (ablations)")
     o = a.parse_args()
     c, ids = load(o.graph)
+    algo_seconds = None
 
     if o.impl == "gve":
         sys.path.insert(0, str(Path.home() / "phd" / "brrr-gve"))
         import method  # compiles/loads GVE; never edited here
-        if o.gve_lib:
-            import ctypes
-            so = ctypes.CDLL(o.gve_lib)
-            so.gve_leiden.restype, so.gve_leiden.argtypes = method.GVE.gve_leiden.restype, method.GVE.gve_leiden.argtypes
-            method.GVE = so  # method.cluster looks GVE up at call time
+        import ctypes
+        so = ctypes.CDLL(o.gve_lib or gve_timed())
+        so.gve_leiden.restype, so.gve_leiden.argtypes = method.GVE.gve_leiden.restype, method.GVE.gve_leiden.argtypes
+        method.GVE = so  # method.cluster looks GVE up at call time
+        if hasattr(so, "gve_last_algo_seconds"):
+            so.gve_last_algo_seconds.restype = ctypes.c_double
+            algo_seconds = so.gve_last_algo_seconds
         c32 = sp.csr_matrix((c.data.astype(np.float32), c.indices, c.indptr), shape=c.shape)  # lossless: the source is f32
 
         def cluster(seed):
@@ -99,15 +122,18 @@ def main():
                              n_iterations=-1 if o.impl == "igraph" else 2)
             return x.obs["leiden"].tolist()
 
-    reps, times, iters = [], [], []
+    reps, times, iters, algo_times = [], [], [], []
     for r in range(o.replicates):
         t = time.perf_counter()
         reps.append(cluster(o.seed + r * o.seed_stride))
         times.append(time.perf_counter() - t)
+        if algo_seconds:
+            algo_times.append(algo_seconds())
     d = BENCH / "out" / "baselines" / o.graph / o.name
     write_member(d, o.name, ids, reps, {**vars(o), "resolution": 1.0, "omp_num_threads": os.environ.get("OMP_NUM_THREADS")})
-    (d / "times.json").write_text(json.dumps({"times": times, "iterations": iters}))
-    print(d, f"k={len(set(reps[0]))}", f"iterations {iters}" if iters else "", f"time min {min(times):.3f}s median {np.median(times):.3f}s")
+    (d / "times.json").write_text(json.dumps({"times": times, "iterations": iters, **({"algo_times": algo_times} if algo_times else {})}))
+    print(d, f"k={len(set(reps[0]))}", f"iterations {iters}" if iters else "", f"time min {min(times):.3f}s median {np.median(times):.3f}s",
+          f"algo min {min(algo_times):.3f}s median {np.median(algo_times):.3f}s" if algo_times else "")
 
 
 if __name__ == "__main__":
