@@ -1151,6 +1151,13 @@ fn mv_tot(tot_int: &[i64], tot: &mut [f64]) {
     }
 }
 
+#[cube(launch_unchecked)]
+fn zero1(x: &mut [u32]) {
+    if ABSOLUTE_POS == 0 {
+        x[0] = 0;
+    }
+}
+
 /// f64 copies of f32 weights (exact), so f32 inputs upload half the bytes.
 #[cube(launch_unchecked)]
 fn widen(src: &[f32], dst: &mut [f64]) {
@@ -1474,16 +1481,19 @@ impl Gpu {
         let (o_to, o_wto, o_wfrom) = (c.empty(mg * 4), c.empty(mg * 8), c.empty(mg * 8));
         let (r_from, r_to, n_to, n_from, h_acc) = (c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4));
         let (h_hubs, h_hub_count) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])));
-        let zero = [0u32];
         if trace {
             let _ = c.read_one(h_cur.clone());
             eprintln!("    moving setup+colouring {:.4} s", t_all.elapsed().as_secs_f64());
         }
         let t_rounds = std::time::Instant::now();
         let mut rounds = 0;
-        for _ in 0..1000 {
-            rounds += 1;
-            let h_moves = self.up(u32::as_bytes(&zero));
+        let h_moves = c.empty(4);
+        // one round: zero the move count, then every colour group. The round is the same launch
+        // sequence every time, so after a warm-up round it is captured once as a device graph
+        // (CUDA graph; re-encoded on wgpu) and replayed: one dispatch instead of 9 launches per
+        // group. Backends without graphs run it as plain launches.
+        let round = || {
+            unsafe { zero1::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_moves, 1)) };
             for (gi, &glen) in lens.iter().enumerate() {
                 let len = glen as usize;
                 // grid-stride kernels over the group's affected list: a capped grid
@@ -1515,10 +1525,28 @@ impl Gpu {
                         arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng));
                 }
             }
-            let moved = u32::from_bytes(&c.read_one(h_moves).unwrap())[0];
+        };
+        let mut graph = None;
+        let mut capture = std::env::var_os("DETLEIDEN_NO_GRAPH").is_none() && c.graph_prepare().is_ok();
+        for _ in 0..1000 {
+            rounds += 1;
+            match &graph {
+                Some(gr) => unsafe { cubecl::client::Graph::replay(gr) }.expect("graph replay"),
+                None => round(),
+            }
+            let moved = u32::from_bytes(&c.read_one(h_moves.clone()).unwrap())[0];
             if moved == 0 {
                 break;
             }
+            if capture {
+                capture = false;
+                c.start_capture().expect("start_capture");
+                round(); // recorded, not run
+                graph = c.stop_capture().ok(); // None: keep launching
+            }
+        }
+        if capture {
+            let _ = c.stop_capture(); // prepared but never recorded
         }
         if trace {
             eprintln!("    moving rounds {:.4} s ({rounds} rounds x {ng} groups)", t_rounds.elapsed().as_secs_f64());
