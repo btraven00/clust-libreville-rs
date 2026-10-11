@@ -14,7 +14,9 @@ cubecl = { version = "0.11", optional = true }
 # GPU backends (cubecl); none by default. One runtime per build.
 gpu-cuda = ["dep:cubecl", "cubecl/cuda"]
 gpu-wgpu = ["dep:cubecl", "cubecl/wgpu"]
-gpu-metal = ["dep:cubecl", "cubecl/metal-native"]
+gpu-metal = ["dep:cubecl", "cubecl/metal-native", "gpu-f32"]
+# kernels in f32 (devices without f64); implied by gpu-metal, also usable with gpu-cuda for testing
+gpu-f32 = []
 
 [dev-dependencies]
 npyz = { version = "0.8", features = ["npz"] }

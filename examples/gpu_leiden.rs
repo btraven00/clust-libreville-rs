@@ -26,12 +26,14 @@ fn main() {
         threads: flag("--threads").map(|s| s.parse().unwrap()),
         ..Default::default()
     };
+    // best of 3; the third element: all three calls gave the same labels
     let best = |f: &dyn Fn() -> Vec<u32>| {
-        let mut r = (Vec::new(), f64::INFINITY);
-        for _ in 0..3 {
+        let mut r = (Vec::new(), f64::INFINITY, true);
+        for i in 0..3 {
             let t = std::time::Instant::now();
             let l = f();
-            r = (l, r.1.min(t.elapsed().as_secs_f64()));
+            let same = i == 0 || l == r.0;
+            r = (l, r.1.min(t.elapsed().as_secs_f64()), r.2 && same);
         }
         r
     };
@@ -42,9 +44,9 @@ fn main() {
         return;
     }
     let cpu_ref = detleiden::Options { apply: detleiden::Apply::OrderFree, ..o.clone() }; // the GPU's rule
-    let (cpu, t_cpu) = best(&|| detleiden::leiden(&g, &cpu_ref));
+    let (cpu, t_cpu, _) = best(&|| detleiden::leiden(&g, &cpu_ref));
     let t_default = best(&|| detleiden::leiden(&g, &o)).1;
-    let (gpu, t_gpu) = best(&|| detleiden::leiden_gpu(&g, &o));
-    println!("n {} niter {} threads {:?}: CPU default {t_default:.3} s | CPU OrderFree {t_cpu:.3} s | GPU {t_gpu:.3} s (best of 3; upload, not JIT) | GPU == CPU OrderFree: {} | Q {:.6}",
-             g.n(), o.n_iterations, o.threads, cpu == gpu, detleiden::modularity(&g, &gpu, 1.0));
+    let (gpu, t_gpu, repeat) = best(&|| detleiden::leiden_gpu(&g, &o));
+    println!("n {} niter {} threads {:?}: CPU default {t_default:.3} s | CPU OrderFree {t_cpu:.3} s | GPU {t_gpu:.3} s (best of 3; upload, not JIT) | GPU == CPU OrderFree: {} | GPU repeatable: {repeat} | Q GPU {:.6} CPU OrderFree {:.6}",
+             g.n(), o.n_iterations, o.threads, cpu == gpu, detleiden::modularity(&g, &gpu, 1.0), detleiden::modularity(&g, &cpu, 1.0));
 }
