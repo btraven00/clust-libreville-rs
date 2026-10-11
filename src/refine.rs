@@ -20,17 +20,18 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 
 use crate::graph::{Csr, Weight};
-use crate::moving::{self, fx, to_fx};
+use crate::moving::{fx, to_fx};
 use crate::{rng, Apply};
 
 /// Refined labels (dense, ordered by first occurrence) and their count. Every refined cluster
 /// lies inside one community of `comm`. `Apply::OrderFree` refines synchronously over the level's
 /// colour groups (`refine_orderfree`), the GPU-reproducible variant.
-pub(crate) fn refine<W: Weight>(g: &Csr<W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize) {
+/// `groups`: the level's colouring (local moving's), used by OrderFree only.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refine<W: Weight>(g: &Csr<W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply,
+                                groups: &[Vec<u32>]) -> (Vec<u32>, usize) {
     if apply == Apply::OrderFree {
-        // the level's colouring is a pure function of (graph, seed, step): the same groups as
-        // local moving's
-        return refine_orderfree(g, comm, &moving::colouring(g, seed, step), gamma, theta, seed, step);
+        return refine_orderfree(g, comm, groups, gamma, theta, seed, step);
     }
     let n = g.n();
     let scale = if g.total > 0.0 { gamma / g.total } else { 0.0 };
@@ -333,7 +334,7 @@ mod tests {
             let g = Csr::from_parts(off, t, w);
             let comm: Vec<u32> = (0..n).map(|v| (r(1_000_000 + v as u64) * k as f64) as u32).collect();
             for (theta, apply) in [(0.01, Apply::Sequential), (0.0, Apply::Sequential), (0.01, Apply::OrderFree), (0.0, Apply::OrderFree)] {
-                let (refd, nr) = refine(&g, &comm, 1.0, theta, seed, 0, apply);
+                let (refd, nr) = refine(&g, &comm, 1.0, theta, seed, 0, apply, &crate::moving::colouring(&g, seed, 0));
                 assert!(nr <= n);
                 for c in bucket(&refd, nr) {
                     assert!(c.iter().all(|&v| comm[v as usize] == comm[c[0] as usize]), "seed {seed}: crosses communities");

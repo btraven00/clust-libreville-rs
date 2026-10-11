@@ -1152,6 +1152,16 @@ fn mv_tot(tot_int: &[i64], tot: &mut [f64]) {
 }
 
 #[cube(launch_unchecked)]
+fn copy_u32(src: &[u32], dst: &mut [u32]) {
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut s = ABSOLUTE_POS;
+    while s < src.len() {
+        dst[s] = src[s];
+        s += stride;
+    }
+}
+
+#[cube(launch_unchecked)]
 fn zero1(x: &mut [u32]) {
     if ABSOLUTE_POS == 0 {
         x[0] = 0;
@@ -1258,6 +1268,30 @@ pub(crate) struct DevGraph {
 pub(crate) struct GpuGraph<'a, W: Clone> {
     host: Cow<'a, Csr<W>>,
     dev: Option<DevGraph>,
+}
+
+/// colour_dev's output: group sizes and offsets, seeded keys, each vertex's group, the groups'
+/// vertex lists (regions at `goffs`), all resident.
+pub(crate) struct DevColouring {
+    lens: Vec<u32>,
+    goffs: Vec<u32>,
+    keys: Handle,
+    colour: Handle,
+    alist: Handle,
+}
+
+pub(crate) enum GpuColouring {
+    Dev(DevColouring, u64, u64), // + (seed, step), to colour on the host for a fallback
+    Host(Vec<Vec<u32>>),
+}
+
+impl GpuColouring {
+    fn groups<W: Weight>(&self, g: &Csr<W>) -> Cow<'_, [Vec<u32>]> {
+        match self {
+            GpuColouring::Host(gr) => Cow::Borrowed(gr),
+            GpuColouring::Dev(_, seed, step) => Cow::Owned(moving::colouring(g, *seed, *step)),
+        }
+    }
 }
 
 pub(crate) struct Gpu {
@@ -1401,10 +1435,12 @@ impl Gpu {
     }
 
     /// refine::refine_orderfree on the device: refined labels (dense) and their count.
-    fn refine_dev(&self, d: &DevGraph, n: usize, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, total: f64) -> (Vec<u32>, usize) {
+    #[allow(clippy::too_many_arguments)]
+    fn refine_dev(&self, d: &DevGraph, n: usize, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, total: f64,
+                  col: &DevColouring) -> (Vec<u32>, usize) {
         let c = &self.client;
         let scale = if total > 0.0 { gamma / total } else { 0.0 };
-        let (lens, goffs, h_keys, _, h_alist) = self.colour_dev(d, n, seed, step); // = local moving's colouring
+        let DevColouring { lens, goffs, keys: h_keys, alist: h_alist, .. } = col;
         let prefix = crate::rng::mix(crate::rng::mix(crate::rng::mix(seed) ^ crate::rng::REFINE_DRAW) ^ step);
         let (k0, k1, k2) = (0x9E37_79B9_7F4A_7C15u64, 0xBF58_476D_1CE4_E5B9u64, 0x94D0_49BB_1331_11EBu64);
         let h_comm = self.up(u32::as_bytes(comm));
@@ -1446,7 +1482,7 @@ impl Gpu {
     }
 
     /// moving::move_nodes with Apply::OrderFree and tol = 0, entirely on the device.
-    fn move_nodes_dev<W: Weight>(&self, g: &Csr<W>, d: &DevGraph, comm: &mut [u32], gamma: f64, seed: u64, step: u64) -> (usize, usize) {
+    fn move_nodes_dev<W: Weight>(&self, g: &Csr<W>, d: &DevGraph, comm: &mut [u32], gamma: f64, col: &DevColouring) -> (usize, usize) {
         let n = g.n();
         if n == 0 || g.total <= 0.0 {
             return (0, 0);
@@ -1456,10 +1492,14 @@ impl Gpu {
         let scale = gamma / g.total;
         let ids = 2 * n;
         let c = &self.client;
-        let tc = std::time::Instant::now();
-        let (lens, goffs, h_keys, h_group_of, h_alist) = self.colour_dev(d, n, seed, step);
-        if std::env::var_os("DETLEIDEN_TRACE").is_some() {
-            eprintln!("    colouring (GPU) n {n}: {:.4} s, {} colours", tc.elapsed().as_secs_f64(), lens.len());
+        let DevColouring { lens, goffs, keys: h_keys, colour: h_group_of, alist } = col;
+        let (lens, goffs) = (lens.clone(), goffs.clone());
+        // the affected lists start as the groups and are rewritten: work on a copy (refinement
+        // needs the groups)
+        let h_alist = c.empty(n * 4);
+        {
+            let (gc, gd) = Self::grid(n.min(GRID_CAP));
+            unsafe { copy_u32::launch_unchecked(c, gc, gd, arg(alist, n), arg(&h_alist, n)) };
         }
         let h_comm = self.up(u32::as_bytes(comm));
         let (h_tot_int, h_tot, h_size, h_aff) = (c.empty(ids * 8), c.empty(ids * 8), c.empty(ids * 4), c.empty(n * 4));
@@ -1558,6 +1598,7 @@ impl Gpu {
 
 impl Backend for Gpu {
     type Graph<'a, W: Weight> = GpuGraph<'a, W>;
+    type Colouring = GpuColouring;
 
     fn upload<'a, W: Weight>(&self, g: &'a Csr<W>) -> Self::Graph<'a, W> {
         let dev = (g.n() >= GPU_MIN_N).then(|| {
@@ -1588,17 +1629,33 @@ impl Backend for Gpu {
     fn hash<W: Weight>(&self, g: &Self::Graph<'_, W>) -> u64 {
         g.host.hash()
     }
-    fn move_nodes<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &mut [u32], gamma: f64, tol: f64, seed: u64, step: u64, apply: Apply) -> (usize, usize) {
+    fn colour<W: Weight>(&self, g: &Self::Graph<'_, W>, seed: u64, step: u64) -> Self::Colouring {
         match &g.dev {
-            Some(d) if apply == Apply::OrderFree && tol == 0.0 => self.move_nodes_dev(&g.host, d, comm, gamma, seed, step),
-            _ => Cpu.move_nodes(&g.host, comm, gamma, tol, seed, step, apply),
+            Some(d) => {
+                let t = std::time::Instant::now();
+                let (lens, goffs, keys, colour, alist) = self.colour_dev(d, g.host.n(), seed, step);
+                if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+                    eprintln!("    colouring (GPU) n {}: {:.4} s, {} colours", g.host.n(), t.elapsed().as_secs_f64(), lens.len());
+                }
+                GpuColouring::Dev(DevColouring { lens, goffs, keys, colour, alist }, seed, step)
+            }
+            None => GpuColouring::Host(moving::colouring(&g.host, seed, step)),
         }
     }
-    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply) -> (Vec<u32>, usize) {
-        match &g.dev {
+    fn move_nodes<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &mut [u32], gamma: f64, tol: f64, col: &Self::Colouring, apply: Apply) -> (usize, usize) {
+        match (&g.dev, col) {
+            (Some(d), GpuColouring::Dev(dc, ..)) if apply == Apply::OrderFree && tol == 0.0 => self.move_nodes_dev(&g.host, d, comm, gamma, dc),
+            _ => moving::move_nodes(&g.host, comm, gamma, tol, &col.groups(&g.host), apply),
+        }
+    }
+    fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply,
+                         col: &Self::Colouring) -> (Vec<u32>, usize) {
+        match (&g.dev, col) {
             // ponytail: rf_hubs sorts at most HUB_P edges; longer rows (none in kNN graphs) refine on the host
-            Some(d) if apply == Apply::OrderFree && g.host.offsets.windows(2).all(|o| o[1] - o[0] <= HUB_P) => self.refine_dev(d, g.host.n(), comm, gamma, theta, seed, step, g.host.total),
-            _ => Cpu.refine(&g.host, comm, gamma, theta, seed, step, apply),
+            (Some(d), GpuColouring::Dev(dc, ..)) if apply == Apply::OrderFree && g.host.offsets.windows(2).all(|o| o[1] - o[0] <= HUB_P) => {
+                self.refine_dev(d, g.host.n(), comm, gamma, theta, seed, step, g.host.total, dc)
+            }
+            _ => crate::refine::refine(&g.host, comm, gamma, theta, seed, step, apply, &col.groups(&g.host)),
         }
     }
     fn aggregate<W: Weight>(&self, g: &Self::Graph<'_, W>, labels: &[u32], n_labels: usize, apply: Apply) -> Self::Graph<'static, f64> {

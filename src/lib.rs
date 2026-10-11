@@ -184,7 +184,8 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
     }
     let t0 = std::time::Instant::now();
     let tol = o.tolerance / 10f64.powi(level as i32);
-    let (colours, rounds) = b.move_nodes(cur, comm, o.resolution, tol, o.seed, step, o.apply);
+    let col = b.colour(cur, o.seed, step);
+    let (colours, rounds) = b.move_nodes(cur, comm, o.resolution, tol, &col, o.apply);
     let (dcomm, n_comm) = refine::dense(comm);
     let move_s = t0.elapsed().as_secs_f64();
     if trace {
@@ -195,7 +196,7 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
     if n_comm == b.n(cur) {
         return None; // every community is one node: nothing to aggregate
     }
-    let (mut agg, mut n_agg) = b.refine(cur, &dcomm, o.resolution, o.theta, o.seed, step, o.apply);
+    let (mut agg, mut n_agg) = b.refine(cur, &dcomm, o.resolution, o.theta, o.seed, step, o.apply, &col);
     let t2 = std::time::Instant::now();
     if n_agg == b.n(cur) {
         (agg, n_agg) = (dcomm.clone(), n_comm); // refinement merged nothing: aggregate the moved partition (igraph)
