@@ -1,5 +1,6 @@
 //! cargo run --release --features gpu-cuda --example gpu_leiden -- GRAPH.npz [--niter N] [--threads T]
-//! leiden_gpu (level-0 local moving on the GPU) against leiden (CPU): same labels? and times.
+//! leiden_gpu (level-0 local moving on the GPU, OrderFree) against leiden with OrderFree (its CPU
+//! reference: same labels?) and against the CPU default (Sequential), with times.
 #[cfg(not(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal")))]
 fn main() {
     eprintln!("build with --features gpu-cuda, gpu-metal or gpu-wgpu");
@@ -40,8 +41,10 @@ fn main() {
         let _ = detleiden::leiden_gpu(&g, &o);
         return;
     }
-    let (cpu, t_cpu) = best(&|| detleiden::leiden(&g, &o));
+    let cpu_ref = detleiden::Options { apply: detleiden::Apply::OrderFree, ..o.clone() }; // the GPU's rule
+    let (cpu, t_cpu) = best(&|| detleiden::leiden(&g, &cpu_ref));
+    let t_default = best(&|| detleiden::leiden(&g, &o)).1;
     let (gpu, t_gpu) = best(&|| detleiden::leiden_gpu(&g, &o));
-    println!("n {} niter {} threads {:?}: CPU {t_cpu:.3} s | GPU hybrid {t_gpu:.3} s (best of 3; includes upload, not JIT) | labels identical: {} | Q {:.6}",
+    println!("n {} niter {} threads {:?}: CPU default {t_default:.3} s | CPU OrderFree {t_cpu:.3} s | GPU {t_gpu:.3} s (best of 3; upload, not JIT) | GPU == CPU OrderFree: {} | Q {:.6}",
              g.n(), o.n_iterations, o.threads, cpu == gpu, detleiden::modularity(&g, &gpu, 1.0));
 }

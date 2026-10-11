@@ -79,10 +79,11 @@ pub fn leiden_traced(g: &Graph, o: &Options) -> (Vec<u32>, Vec<u64>) {
     (l, h)
 }
 
-/// `leiden` with level-0 local moving on the GPU (cubecl; the build's runtime). On CUDA (f64)
-/// the labels equal the CPU's; on f32-only devices they may differ but stay deterministic.
+/// `leiden` with level-0 local moving on the GPU (cubecl; the build's runtime), always with
+/// `Apply::OrderFree`: on CUDA (f64) the labels equal `leiden` with `apply: Apply::OrderFree`.
 #[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
 pub fn leiden_gpu(g: &Graph, o: &Options) -> Vec<u32> {
+    let o = &Options { apply: Apply::OrderFree, ..o.clone() }; // the rule the device runs
     let gpu = gpu::Gpu::new();
     with_pool(o, || match &g.0 {
         Repr::F32(c) => iterate(&gpu, c, o, None),
