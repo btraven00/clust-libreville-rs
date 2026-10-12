@@ -25,10 +25,13 @@ not buy.
 
 ```{r libraries}
 library(clusterLibreville)
-library(scuttle)
-library(scran)
-library(scater)
+library(SingleCellExperiment)
 ```
+
+Each step below names its package: quality control and normalisation from
+`r BiocStyle::Biocpkg("scuttle")`, pre-clustering for size factors, variance
+modelling and PCA from `r BiocStyle::Biocpkg("scran")`, UMAP and plots from
+`r BiocStyle::Biocpkg("scater")`, graphs from `r BiocStyle::Biocpkg("bluster")`.
 
 # Data: mouse brain cells (Zeisel et al. 2015)
 
@@ -49,27 +52,29 @@ proportions:
 
 ```{r qc}
 is.mito <- grepl("^mt-", rownames(sce))
-stats <- perCellQCMetrics(sce, subsets = list(Mt = is.mito))
-qc <- quickPerCellQC(stats, percent_subsets = c("altexps_ERCC_percent",
-                                                "subsets_Mt_percent"))
+stats <- scuttle::perCellQCMetrics(sce, subsets = list(Mt = is.mito))
+qc <- scuttle::quickPerCellQC(
+    stats, percent_subsets = c("altexps_ERCC_percent", "subsets_Mt_percent"))
 sce <- sce[, !qc$discard]
 ncol(sce)
 ```
 
 Normalisation by deconvolution, variance modelling and the top 10% of highly
-variable genes, then PCA and UMAP:
+variable genes, then PCA and UMAP. `scran::quickCluster()` is only a coarse
+pre-clustering, so that `scran::computeSumFactors()` pools similar cells when
+estimating size factors; it is not the clustering this vignette is about:
 
 ```{r normalise}
 set.seed(1000)
-clusters <- quickCluster(sce)
-sce <- computeSumFactors(sce, cluster = clusters)
-sce <- logNormCounts(sce)
-dec <- modelGeneVar(sce)
-hvg <- getTopHVGs(dec, prop = 0.1)
+clusters <- scran::quickCluster(sce)
+sce <- scran::computeSumFactors(sce, cluster = clusters)
+sce <- scuttle::logNormCounts(sce)
+dec <- scran::modelGeneVar(sce)
+hvg <- scran::getTopHVGs(dec, prop = 0.1)
 set.seed(1001)
-sce <- fixedPCA(sce, rank = 50, subset.row = hvg)
+sce <- scran::fixedPCA(sce, rank = 50, subset.row = hvg)
 set.seed(1002)
-sce <- runUMAP(sce, dimred = "PCA")
+sce <- scater::runUMAP(sce, dimred = "PCA")
 ```
 
 # Clustering
@@ -81,7 +86,7 @@ the labels as a factor, community 1 the largest:
 ```{r cluster}
 colLabels(sce) <- leiden(sce, use.dimred = "PCA", k = 10, seed = 0)
 table(colLabels(sce))
-plotReducedDim(sce, "UMAP", colour_by = "label", text_by = "label")
+scater::plotReducedDim(sce, "UMAP", colour_by = "label", text_by = "label")
 ```
 
 The clusters against the published cell types:
@@ -152,7 +157,7 @@ data.frame(resolution = res,
 plots <- lapply(c(1, 4), function(i) {
     sce$res <- by_res[[i]]
     r <- res[i]
-    plotReducedDim(sce, "UMAP", colour_by = "res") +
+    scater::plotReducedDim(sce, "UMAP", colour_by = "res") +
         ggplot2::ggtitle(paste("resolution", r))
 })
 patchwork::wrap_plots(plots)
@@ -212,10 +217,10 @@ run <- lapply(choices, function(f) {
 })
 labels <- lapply(run, `[[`, "labels")
 ari <- function(a, b) bluster::pairwiseRand(a, b, mode = "index")
+ref <- labels[["clusterLibreville, converged"]]
 data.frame(clusters = vapply(labels, nlevels, integer(1)),
            ARI_types = vapply(labels, ari, numeric(1), b = sce$level1class),
-           ARI_libreville = vapply(labels, ari, numeric(1),
-                                   b = labels[["clusterLibreville, converged"]]),
+           ARI_libreville = vapply(labels, ari, numeric(1), b = ref),
            modularity = vapply(labels, function(l) modularity(g, l),
                                numeric(1)),
            seconds = vapply(run, `[[`, numeric(1), "seconds"))
