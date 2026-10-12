@@ -6,7 +6,7 @@ code is the reference for how.
 
 ## The guarantee
 
-**Same graph, same options, same seed: the same labels, at any thread count, on any machine.**
+**Same graph, same options, same seed: the same labels, at any thread count; on the CPU, across machines by design (tested on x86_64 and aarch64).**
 
 - Thread count: tested bit for bit (labels and per-level graph hashes) at 1, 2, 3, 4, 8 and 16 threads
   (`tests/threads.rs`, the hao2021 lock, a random-graph harness).
