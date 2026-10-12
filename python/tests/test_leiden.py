@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import pytest
 import scipy.sparse as sp
@@ -247,3 +249,18 @@ def test_champ_agreement_scores():
         assert a.to_prev[i] == pytest.approx(ref, abs=1e-9)
     with pytest.raises(ValueError):
         cl.champ(g, res, metric="ari")
+
+
+def _leiden_in_child(g):
+    return cl.leiden(g, seed=0, threads=2)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no fork")
+def test_leiden_runs_in_a_forked_child():
+    import multiprocessing
+
+    g, _ = planted()
+    parent = cl.leiden(g, seed=0, threads=2)  # caches the 2-thread pool
+    with multiprocessing.get_context("fork").Pool(1) as p:
+        child = p.apply_async(_leiden_in_child, (g,)).get(timeout=30)  # TimeoutError: the child hung
+    assert np.array_equal(child, parent)

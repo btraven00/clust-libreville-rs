@@ -145,3 +145,14 @@ test_that("champ: agreement with neighbours and seeds, NVI or AMI", {
     }
     expect_error(champ(m, res, metric = "ari"))
 })
+
+test_that("leiden runs in a forked child (mclapply) after running in the parent", {
+    skip_on_os("windows")
+    m <- planted()
+    parent <- leiden(m, seed = 0, threads = 2) # caches the 2-thread pool
+    job <- parallel::mcparallel(leiden(m, seed = 0, threads = 2))
+    res <- parallel::mccollect(job, wait = FALSE, timeout = 30)
+    if (is.null(res)) tools::pskill(job$pid, tools::SIGKILL)
+    expect_false(is.null(res)) # NULL: the child hung on the parent's pool
+    expect_identical(res[[1]], parent)
+})

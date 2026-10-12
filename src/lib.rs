@@ -152,12 +152,22 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
         std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
     });
+    type Pools = (u32, Vec<(usize, std::rc::Rc<rayon::ThreadPool>)>);
     thread_local! {
-        // this thread's pools by size; ponytail: never freed (one per size a thread asks for)
-        static POOLS: std::cell::RefCell<Vec<(usize, std::rc::Rc<rayon::ThreadPool>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        // this thread's pools by size, and the process they were built in; ponytail: never freed (one
+        // per size a thread asks for)
+        static POOLS: std::cell::RefCell<Pools> = const { std::cell::RefCell::new((0, Vec::new())) };
     }
     let pool = POOLS.with(|p| {
         let mut p = p.borrow_mut();
+        let pid = std::process::id();
+        if p.0 != pid {
+            // fork() (R's mclapply, Python's multiprocessing) copies this cache but not the pools'
+            // worker threads, so a cached pool would hang the child. Leak the copies (dropping one
+            // may touch state the parent's threads held at the fork) and build new pools.
+            std::mem::forget(std::mem::replace(&mut *p, (pid, Vec::new())));
+        }
+        let p = &mut p.1;
         if let Some((_, pool)) = p.iter().find(|(t, _)| *t == threads) {
             return pool.clone();
         }

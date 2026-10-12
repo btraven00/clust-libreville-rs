@@ -620,6 +620,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "cubecl",
+ "libc",
  "npyz",
  "rayon",
 ]

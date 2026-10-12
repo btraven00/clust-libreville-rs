@@ -4,7 +4,7 @@
 //! of the pool's lines: a few partitions, each optimal on an interval of γ. Optimal relative to the pool
 //! only; the pool is the caller's (e.g. `leiden` over a grid of resolutions × seeds).
 
-use crate::{leiden, modularity_line, Graph, Metric, Options};
+use crate::{leiden, modularity_line, with_pool, Graph, Metric, Options};
 use rayon::prelude::*;
 
 /// `pool[index]` has the highest modularity in the pool for every γ in `[lo, hi]`.
@@ -52,17 +52,20 @@ pub fn champ_grid(g: &Graph, resolutions: &[f64], seeds: &[u64], o: &Options, ga
         .collect();
     let domains = champ(g, &pool, gamma_min, gamma_max);
     let s = seeds.len();
-    let prev: Vec<f64> = (0..domains.len()).into_par_iter()
-        .map(|d| if d == 0 { f64::NAN } else { metric.eval(&pool[domains[d - 1].index], &pool[domains[d].index]) })
-        .collect();
-    let mean = |v: Vec<f64>| if v.is_empty() { f64::NAN } else { v.iter().sum::<f64>() / v.len() as f64 };
-    domains.par_iter().enumerate().map(|(d, dom)| {
-        let neighbours = mean([prev[d], prev.get(d + 1).copied().unwrap_or(f64::NAN)].into_iter()
-            .filter(|x| !x.is_nan()).collect());
-        let row = dom.index / s * s;
-        let mates = mean((row..row + s).filter(|&j| j != dom.index).map(|j| metric.eval(&pool[dom.index], &pool[j])).collect());
-        (*dom, pool[dom.index].clone(), Agreement { prev: prev[d], neighbours, seeds: mates })
-    }).collect()
+    // the caller's cached pool, not rayon's global one (which a fork would leave dead)
+    with_pool(o, || {
+        let prev: Vec<f64> = (0..domains.len()).into_par_iter()
+            .map(|d| if d == 0 { f64::NAN } else { metric.eval(&pool[domains[d - 1].index], &pool[domains[d].index]) })
+            .collect();
+        let mean = |v: Vec<f64>| if v.is_empty() { f64::NAN } else { v.iter().sum::<f64>() / v.len() as f64 };
+        domains.par_iter().enumerate().map(|(d, dom)| {
+            let neighbours = mean([prev[d], prev.get(d + 1).copied().unwrap_or(f64::NAN)].into_iter()
+                .filter(|x| !x.is_nan()).collect());
+            let row = dom.index / s * s;
+            let mates = mean((row..row + s).filter(|&j| j != dom.index).map(|j| metric.eval(&pool[dom.index], &pool[j])).collect());
+            (*dom, pool[dom.index].clone(), Agreement { prev: prev[d], neighbours, seeds: mates })
+        }).collect()
+    })
 }
 
 // ponytail: gift wrapping, O(pool × envelope); sort + stack (O(P log P)) if pools reach ~1e5 partitions
