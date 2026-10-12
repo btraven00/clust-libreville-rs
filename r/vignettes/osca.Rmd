@@ -229,24 +229,43 @@ data.frame(clusters = vapply(labels, nlevels, integer(1)),
 With the modularity objective, igraph's Leiden and `clusterLibreville` find
 essentially the same partition, at 2 iterations (igraph's default) and run to
 convergence (`n_iterations = -1`; igraph's R package converges, but
-python-igraph up to 0.11.9 runs a single iteration for -1). Times are for the
-clustering step alone, on the machine that built this vignette; igraph runs on
-one thread and `clusterLibreville` on all cores. At 2 iterations the two take
-about the same time; run to convergence, igraph is the faster on a graph this
-small (`r ncol(sce)` cells). The balance flips with size: on the 68,579 PBMCs
-of `r BiocStyle::Biocpkg("TENxPBMCData")` (`"pbmc68k"`, same preprocessing,
-same kind of graph), clustering to convergence took 73 s with igraph against
-42 s with `clusterLibreville` on one thread and 16 s on eight, with the same
-partition (an 8-core laptop with other jobs running, so the multi-threaded
-times are pessimistic). The crossover lies between these two sizes. So
-`clusterLibreville`'s advantages are reproducibility at any number of threads,
-and speed once datasets reach tens of thousands of cells.
+python-igraph up to 0.11.9 runs a single iteration for -1).
 
-Leiden through bluster with its default
-arguments optimises CPM instead and splits the data into many small clusters:
-pass `objective_function = "modularity"` (or a CPM resolution suited to the
-graph's weights) when using it. Walktrap is a different algorithm, with its own
+Leiden through bluster with its default arguments optimises CPM instead and
+splits the data into many small clusters: pass
+`objective_function = "modularity"` (or a CPM resolution suited to the graph's
+weights) when using it. Walktrap is a different algorithm, with its own
 trade-offs.
+
+## Does performance matter?
+
+Not on a dataset this size. The `seconds` column above is the clustering step
+alone, on the machine that built this vignette; igraph runs on one thread and
+`clusterLibreville` on all cores. At 2 iterations the two take about the same
+time, and run to convergence igraph is the faster on `r ncol(sce)` cells:
+`clusterLibreville` pays fixed costs (a thread pool, graph conversion and
+validation) that a small graph doesn't amortise.
+
+The balance flips with size. On the 68,579 PBMCs of
+`r BiocStyle::Biocpkg("TENxPBMCData")` (`"pbmc68k"`, the same preprocessing
+and the same kind of SNN graph), the clustering step took:
+
+| method | threads | seconds |
+|---|---|---|
+| igraph Leiden, 2 iterations | 1 | 49 |
+| igraph Leiden, converged | 1 | 73 |
+| `clusterLibreville`, converged | 1 | 42 |
+| `clusterLibreville`, converged | 8 | 16 |
+
+All runs converge to the same partition (10 clusters, adjusted Rand index
+1.000), and `clusterLibreville`'s labels are identical at 1, 2, 4 and 8
+threads. These times come from an 8-core laptop with other jobs running, so
+the multi-threaded ones are pessimistic; they were measured outside this
+vignette, which would otherwise take minutes to build. The crossover lies
+somewhere between the two dataset sizes. So `clusterLibreville` pays off once
+datasets reach tens of thousands of cells, and for repeated runs (many seeds
+or resolutions) on any dataset; its other advantage, reproducibility at any
+number of threads, holds at every size.
 
 # Session information
 
