@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import scipy.sparse as sp
+PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and detleiden checkouts
 
 BENCH = Path(__file__).resolve().parents[1]
 
@@ -48,7 +49,7 @@ def gve_timed():
     import glob
     import hashlib
     import subprocess
-    src, inc = BENCH / "gve" / "leiden_timed.cxx", Path.home() / "phd" / "brrr-gve" / "gve"
+    src, inc = BENCH / "gve" / "leiden_timed.cxx", PHD / "brrr-gve" / "gve"
     key = hashlib.sha256(src.read_bytes() + b"".join(f.read_bytes() for f in sorted((inc / "inc").glob("*.hxx")))).hexdigest()[:12]
     lib = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "detleiden" / f"gve-timed-{key}.so"
     if not lib.exists():
@@ -75,7 +76,7 @@ def main():
     algo_seconds = None
 
     if o.impl == "gve":
-        sys.path.insert(0, str(Path.home() / "phd" / "brrr-gve"))
+        sys.path.insert(0, str(PHD / "brrr-gve"))
         import method  # compiles/loads GVE; never edited here
         import ctypes
         so = ctypes.CDLL(o.gve_lib or gve_timed())

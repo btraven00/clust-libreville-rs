@@ -18,9 +18,11 @@ from pathlib import Path
 
 import numpy as np
 import scipy.sparse as sp
+import os
+PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and detleiden checkouts
 
 BENCH = Path(__file__).resolve().parents[1]
-ARI_PY = Path.home() / "phd/sc-brrr/metrics/ari.py"
+ARI_PY = PHD / "sc-brrr/metrics/ari.py"
 _s = importlib.util.spec_from_file_location("sc_brrr_ari", ARI_PY)
 ari = importlib.util.module_from_spec(_s)
 _s.loader.exec_module(ari)  # reuse coded()/ari()/replicates(), never copied
@@ -50,7 +52,7 @@ def canon_hash(lab):
 
 def default_reference(graph):
     size = graph.split("_")[-1]
-    hits = sorted(glob.glob(str(Path.home() / f"phd/sc-brrr/runs/*-20261010T1[89]*-{size}-*/out/data/hao2021_{size}/*/pipeline/reference/*/reference_clusters.tsv")))
+    hits = sorted(glob.glob(str(PHD / f"sc-brrr/runs/*-20261010T1[89]*-{size}-*/out/data/hao2021_{size}/*/pipeline/reference/*/reference_clusters.tsv")))
     return Path(hits[0]).parent if hits and graph.startswith("hao2021_") else None
 
 

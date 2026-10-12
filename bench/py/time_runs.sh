@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
 # time_runs.sh <graph>...: best-of-3 wall times (gve: also algo_times, leidenStaticOmp alone) (same seed 100) under the shared lock; members bench/out/baselines/<graph>/time-*/times.json.
 # Each run waits, holding the lock, until the machine is idle (see idle()).
 set -euo pipefail

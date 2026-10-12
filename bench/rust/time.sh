@@ -1,4 +1,5 @@
 #!/bin/sh
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
 # Timed runs, each holding the shared CPU lock: time.sh <graph> <impl> <threads> <niter> <reps> [extra ldbench flags]
 # -> out/leiden-rs/<graph>/<impl>[<flags>]-time-n<niter>/<T>t/run<k>.{npy,json}; best-of = min time_s over runs.
 set -e

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
 # run_baselines.sh <graph>...: untimed baseline members (labels + determinism) into bench/out/baselines/<graph>/, then bench_score.py.
 # IMPLS="igraph2 igraph-fix leidenalg" (default) picks the 20-seed single-threaded arms. Runs hold the lock (untimed, but they would
 # perturb the other track's timings).

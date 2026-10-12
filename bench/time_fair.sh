@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
 # time_fair.sh [-r ROUNDS] [-t "1 8"] [-b DET_BIN] GRAPH...: "algo only" times of GVE vs detleiden (one iteration,
 # seed 100), alternating: each round runs one fresh GVE process, then one fresh detleiden process, per thread count.
 # No call is discarded as warm-up. Each process waits under bench/.cpu.lock until the machine is idle (as time_runs.sh).

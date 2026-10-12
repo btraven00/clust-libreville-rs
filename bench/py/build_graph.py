@@ -11,10 +11,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
-sys.path.insert(0, str(Path.home() / "phd/brrr-gve"))
+sys.path.insert(0, str(PHD / "brrr-gve"))
 import anndata as ad
 import faiss
 import method
+import os
+PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and detleiden checkouts
 
 GRAPHS = Path(__file__).resolve().parents[1] / "graphs"
 size = sys.argv[1]
@@ -24,7 +26,7 @@ p = lambda **o: SimpleNamespace(n_components=50, n_neighbors=15, seed=0, resolut
 if emb_path.exists():
     E = np.load(emb_path); ids154 = np.load(GRAPHS / "ids154k.npy")
 else:
-    a = ad.read_h5ad(Path.home() / "phd/sc-brrr/data/prep/hao2021_all.h5ad")
+    a = ad.read_h5ad(PHD / "sc-brrr/data/prep/hao2021_all.h5ad")
     t = time.time(); E = method.pca(a, p()); print("pca", a.shape, time.time() - t, flush=True)
     ids154 = np.asarray(a.obs_names).astype(str); del a
     np.save(emb_path, E); np.save(GRAPHS / "ids154k.npy", ids154)
