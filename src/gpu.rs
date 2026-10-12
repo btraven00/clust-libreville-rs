@@ -121,9 +121,10 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[Fl], strength: &[Fl], com
                     let w = Fl::cast_from(weights[e]);
                     let mut found = false;
                     for j in 0..nt {
-                        if !found && cs[j] == c {
+                        if cs[j] == c {
                             ws[j] += w;
                             found = true;
+                            break; // candidates are unique: the first match is the only one
                         }
                     }
                     if !found {
