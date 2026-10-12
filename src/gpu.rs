@@ -824,6 +824,41 @@ fn mark(offsets: &[u32], targets: &[u32], comm: &[u32], alist: &mut [u32], goff:
 }
 
 
+/// `mark`, one plane per moved vertex (lanes over its edges, so the row is read coalesced), and a
+/// plain load before the exchange, so neighbours already flagged cost no atomic. The same flags and
+/// lists up to list order, which nothing depends on (see `mark`).
+#[cube(launch_unchecked)]
+fn mark_plane(offsets: &[u32], targets: &[u32], comm: &[u32], alist: &mut [u32], goff: u32, cur: &[u32], acc: &[u32],
+              affected: &[Atomic<u32>], group_of: &[u32], goffs: &[u32], acount: &[Atomic<u32>]) {
+    let count = cur[0] as usize;
+    let pd = PLANE_DIM as usize;
+    let stride = CUBE_COUNT * CUBE_DIM_Y as usize;
+    let mut i = CUBE_POS * CUBE_DIM_Y as usize + UNIT_POS_Y as usize;
+    while i < count {
+        if acc[i] == 1 {
+            let v = alist[goff as usize + i] as usize;
+            let c = comm[v];
+            let (start, end) = (offsets[v] as usize, offsets[v + 1] as usize);
+            let mut e = start + UNIT_POS_PLANE as usize;
+            while e < end {
+                let u = targets[e] as usize;
+                // nested, not `&&`: cubecl doesn't promise short-circuit evaluation
+                if comm[u] != c {
+                    if affected[u].load() == 0 {
+                        if affected[u].exchange(1u32) == 0 {
+                            let gu = group_of[u] as usize;
+                            let slot = acount[gu].fetch_add(1u32);
+                            alist[(goffs[gu] + slot) as usize] = u as u32;
+                        }
+                    }
+                }
+                e += pd;
+            }
+        }
+        i += stride;
+    }
+}
+
 // ---- refinement (refine::refine_orderfree, bit for bit) ----------------------------------------
 
 /// 64-bit integer atomic add on a pair of u32 atomics (lo at 2i, hi at 2i + 1: the buffer's
@@ -1772,7 +1807,7 @@ impl Gpu {
                 let verts = h_alist.clone().offset_start(goff as u64 * 4);
                 unsafe {
                     begin::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_acount, ng), gi as u32, arg(&h_cur, 1));
-                    match plane {
+                    match &plane {
                         Some((pc, pd)) => decide_plane::launch_unchecked(c, pc.clone(), pd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
                         arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_cur, 1),
                         arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1)),
@@ -1796,8 +1831,12 @@ impl Gpu {
                         arg(&r_from, len), arg(&r_to, len), arg(&h_tot_int, 2 * ids), arg(&h_size, ids), arg(&h_comm, n), arg(&h_moves, 1));
                     refresh::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&h_acc, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_tot_int, ids), arg(&h_tot, ids));
-                    mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
-                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng));
+                    match &plane {
+                        Some((pc, pd)) => mark_plane::launch_unchecked(c, pc.clone(), pd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
+                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
+                        None => mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
+                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
+                    };
                 }
             }
         };
