@@ -968,9 +968,10 @@ fn rf_propose(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], c
                         let c = refd[u];
                         let mut found = false;
                         for j in 0..nt {
-                            if !found && cl[j] == c {
+                            if cl[j] == c {
                                 ws[j] += wint[e];
                                 found = true;
+                                break; // clusters are distinct: the first match is the only one
                             }
                         }
                         if !found {
@@ -1006,13 +1007,18 @@ fn rf_propose(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], c
                         cl[a] = sc[a];
                         ws[a] = sw[a];
                     }
+                    // each candidate's gain once (rf_gain reads ext[c] and cw[c]); the three passes reuse it
+                    let mut gs = Array::<Fl>::new(MAXC);
+                    for j in 0..nt {
+                        gs[j] = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                    }
                     // choose (refine::choose): best = first maximum, own (gain 0) first
                     let mut best_c = own;
                     let mut best_g = Fl::new(0.0f32);
                     let mut best_w = i64::new(0);
                     let mut ncand = 1u32;
                     for j in 0..nt {
-                        let g = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                        let g = gs[j];
                         if g >= Fl::new(0.0f32) {
                             ncand += 1;
                             if g > best_g {
@@ -1027,7 +1033,7 @@ fn rf_propose(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], c
                     if theta > Fl::new(0.0f32) && ncand > 1 {
                         let mut sum = exp_neg((Fl::new(0.0f32) - best_g) / theta);
                         for j in 0..nt {
-                            let g = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                            let g = gs[j];
                             if g >= Fl::new(0.0f32) {
                                 sum += exp_neg((g - best_g) / theta);
                             }
@@ -1040,7 +1046,7 @@ fn rf_propose(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], c
                         chosen = own;
                         chosen_w = i64::new(0);
                         for j in 0..nt {
-                            let g = rf_gain(cl[j], ws[j], own, ext, cw, scale, k, k_s);
+                            let g = gs[j];
                             if g >= Fl::new(0.0f32) && !done {
                                 cum += exp_neg((g - best_g) / theta);
                                 chosen = cl[j];
@@ -1084,8 +1090,14 @@ fn rf_hubs(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], comm
         let k = strength[v];
         let k_s = fxv(ks[cs_ as usize]);
         let ext_v = ext[own as usize];
+        // sort only the next power of two >= deg (keys past deg are the u64::MAX padding, sorted
+        // last either way, and keys are distinct): the same order as sorting all HUB_P slots
+        let mut n2 = 2usize;
+        while n2 < deg && n2 < HUB_P {
+            n2 *= 2;
+        }
         let mut p = unit;
-        while p < HUB_P {
+        while p < n2 {
             let mut key = !u64::new(0);
             if p < deg {
                 let u = targets[start + p] as usize;
@@ -1098,11 +1110,11 @@ fn rf_hubs(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], comm
         }
         sync_cube();
         let mut width = 2usize;
-        while width <= HUB_P {
+        while width <= n2 {
             let mut stride = width / 2;
             while stride > 0 {
                 let mut t = unit;
-                while t < HUB_P / 2 {
+                while t < n2 / 2 {
                     let a = 2 * stride * (t / stride) + t % stride;
                     let b = a + stride;
                     let (ka, kb) = (keys[a], keys[b]);
@@ -1142,9 +1154,9 @@ fn rf_hubs(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], comm
                 }
                 let mut cur_c = 0xFFFF_FFFFu64;
                 let mut cur_w = i64::new(0);
-                for q in 0..HUB_P + 1 {
+                for q in 0..n2 + 1 {
                     let mut kq = !u64::new(0);
-                    if q < HUB_P {
+                    if q < n2 {
                         kq = keys[q];
                     }
                     let c = kq >> 32u64;
