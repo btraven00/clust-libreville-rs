@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixed-point variants benchmark (detleiden): strict / min-gain (reuse-colouring was benchmarked and removed, ce96f8e), 8 threads,
+# Fixed-point variants benchmark (detleiden): strict / min-gain (reuse-colouring was benchmarked and removed, b87d839), 8 threads,
 # under the CPU lock. Labels -> bench/out/detleiden/<graph>/<variant>/run<seed>.npy, one log line per run.
 # usage: bench/fixpoint.sh LOG
 cd "$(dirname "$0")/.." || exit 1
