@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "cluster-libreville"
+name = "sc-cluster-libreville"
 description = "Parallel and deterministic implementation of the Leiden community detection algorithm"
 readme = "README.md"
 license = "MIT"

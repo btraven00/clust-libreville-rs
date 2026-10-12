@@ -1,4 +1,4 @@
-# cluster-libreville
+# sc-cluster-libreville
 
 Seeded, deterministic, parallel Leiden community detection (modularity), in Rust. **The same
 seed gives the same labels at any number of threads**, so results are reproducible on a laptop
@@ -6,7 +6,7 @@ and on a 64-core server. The parallel design follows GVE-Leiden (Sahu 2023), wit
 order-independent moves instead of asynchronous ones.
 
 ```
-pip install cluster-libreville
+pip install sc-cluster-libreville   # import cluster_libreville
 ```
 
 ```python
