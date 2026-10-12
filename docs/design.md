@@ -14,7 +14,8 @@ code is the reference for how.
   `tests/fixtures/` were produced on x86_64; CI compares every wheel (Linux and macOS, x86_64 and aarch64)
   against them (`python/tests/test_fixtures.py`).
 - GPU: with `Apply::OrderFree` the CUDA backend gives the CPU's labels bit for bit. Metal/WGSL have no
-  f64 and run an f32 variant (`gpu-f32`) that is deterministic but not equal to the CPU.
+  f64 and run the kernels in f32 (`gpu-f32`): repeatable on a device, equality with the CPU not guaranteed
+  (it held on hao2021 100k with f32 kernels on CUDA).
 
 Determinism is not seed independence: different seeds give different partitions, as in every Leiden.
 

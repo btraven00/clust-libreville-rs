@@ -225,7 +225,10 @@ fn decide_hubs(offsets: &[u32], targets: &[u32], weights: &[Fl], strength: &[Fl]
                         let a = 2 * stride * (t / stride) + t % stride;
                         let b = a + stride;
                         let (ka, kb) = (keys[a], keys[b]);
-                        if (ka > kb) == ((a & width) == 0) {
+                        // ascending blocks swap if ka > kb, descending if ka < kb (not `bool == bool`:
+                        // cubecl's Metal backend can't emit that comparison)
+                        let up = (a & width) == 0;
+                        if (up && ka > kb) || (!up && ka < kb) {
                             keys[a] = kb;
                             keys[b] = ka;
                         }
@@ -910,7 +913,8 @@ fn rf_hubs(offsets: &[u32], targets: &[u32], wint: &[i64], strength: &[Fl], comm
                     let a = 2 * stride * (t / stride) + t % stride;
                     let b = a + stride;
                     let (ka, kb) = (keys[a], keys[b]);
-                    if (ka > kb) == ((a & width) == 0) {
+                    let up = (a & width) == 0; // see the hub sort above: no `bool == bool` on Metal
+                    if (up && ka > kb) || (!up && ka < kb) {
                         keys[a] = kb;
                         keys[b] = ka;
                     }
