@@ -13,7 +13,8 @@ pip install sc-cluster-libreville   # import cluster_libreville
 import cluster_libreville as cl
 
 # a symmetric scipy sparse matrix, e.g. scanpy's kNN connectivities
-labels = cl.leiden(adata.obsp["connectivities"], resolution=1.0, seed=0)  # int32, 0 = largest
+graph = adata.obsp["connectivities"]
+labels = cl.leiden(graph, resolution=1.0, seed=0)  # int32, 0 = largest
 
 # scanpy-style: writes adata.obs["leiden"] (categorical) like sc.tl.leiden
 cl.tl.leiden(adata, resolution=1.0, random_state=0)
@@ -21,7 +22,7 @@ cl.tl.leiden(adata, resolution=1.0, random_state=0)
 # an undirected edge list: polars / pandas / pyarrow / numpy columns
 labels = cl.leiden_edges(df["src"], df["dst"], df["weight"], seed=0)
 
-cl.modularity(graph, labels)
+cl.modularity(graph, labels)  # of any labels on the graph, e.g. to compare partitions
 ```
 
 Options: `resolution`, `seed`, `n_iterations` (-1: until an iteration changes nothing),
