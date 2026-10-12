@@ -28,8 +28,14 @@ Imports:
     stats
 Suggests:
     BiocStyle,
+    ggplot2,
     knitr,
+    patchwork,
     rmarkdown,
+    scater,
+    scran,
+    scRNAseq,
+    scuttle,
     testthat (>= 3.0.0)
 VignetteBuilder: knitr
 Config/testthat/edition: 3
