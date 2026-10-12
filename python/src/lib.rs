@@ -20,11 +20,18 @@ fn graph(indptr: &[i64], indices: &[i32], data: &[f64], check_symmetry: bool) ->
 #[allow(clippy::too_many_arguments)]
 fn leiden_csr<'py>(py: Python<'py>, indptr: PyReadonlyArray1<'py, i64>, indices: PyReadonlyArray1<'py, i32>,
                    data: PyReadonlyArray1<'py, f64>, resolution: f64, seed: u64, n_iterations: i64, theta: f64, min_gain: f64,
-                   threads: Option<usize>, check_symmetry: bool) -> PyResult<Bound<'py, PyArray1<i32>>> {
+                   threads: Option<usize>, check_symmetry: bool)
+                   -> PyResult<(Bound<'py, PyArray1<i32>>, usize, &'static str, f64)> {
     let g = graph(indptr.as_slice()?, indices.as_slice()?, data.as_slice()?, check_symmetry)?;
     let o = clust_libreville_rs::Options { resolution, seed, n_iterations, theta, min_gain, threads, ..Default::default() };
-    let labels = py.detach(|| clust_libreville_rs::leiden(&g, &o));
-    Ok(labels.into_iter().map(|l| l as i32).collect::<Vec<i32>>().into_pyarray(py))
+    let r = py.detach(|| clust_libreville_rs::leiden_run(&g, &o));
+    let stop = match r.stop {
+        clust_libreville_rs::Stop::Converged => "converged",
+        clust_libreville_rs::Stop::MinGain => "min_gain",
+        clust_libreville_rs::Stop::IterationCap => "n_iterations",
+    };
+    let labels = r.labels.into_iter().map(|l| l as i32).collect::<Vec<i32>>().into_pyarray(py);
+    Ok((labels, r.iterations, stop, r.modularity))
 }
 
 #[pyfunction]

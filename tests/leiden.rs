@@ -160,3 +160,21 @@ fn resolution_controls_granularity() {
     let k = |r: f64| *leiden(&g, &Options { resolution: r, ..Default::default() }).iter().max().unwrap() + 1;
     assert!(k(0.3) <= k(1.0) && k(1.0) <= k(3.0), "{} {} {}", k(0.3), k(1.0), k(3.0));
 }
+
+#[test]
+fn run_reports_how_it_ended() {
+    use clust_libreville_rs::{leiden_run, Stop};
+    let (n, edges) = common::planted(5, 4, 30, 0.3, 0.01);
+    let g = common::graph(n, &edges);
+    let strict = leiden_run(&g, &Options { seed: 1, ..Default::default() });
+    assert_eq!(strict.stop, Stop::Converged);
+    assert!(strict.converged() && strict.iterations >= 1);
+    assert_eq!(strict.labels, leiden(&g, &Options { seed: 1, ..Default::default() }));
+    assert!((strict.modularity - modularity(&g, &strict.labels, 1.0)).abs() < 1e-12);
+    let one = leiden_run(&g, &Options { seed: 1, n_iterations: 1, ..Default::default() });
+    assert_eq!(one.iterations, 1);
+    assert_eq!(one.stop, Stop::IterationCap); // the first iteration always moves vertices
+    // no second iteration gains 0.5: the run ends at the second at the latest, on either criterion
+    let gain = leiden_run(&g, &Options { seed: 1, min_gain: 0.5, ..Default::default() });
+    assert!(gain.iterations <= 2 && gain.stop != Stop::IterationCap, "{:?} {}", gain.stop, gain.iterations);
+}

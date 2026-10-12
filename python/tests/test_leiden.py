@@ -161,3 +161,13 @@ def test_check_symmetry_off():
     assert len(labels) == g.shape[0]
     with pytest.raises(ValueError, match="out of range"):  # bounds are always checked
         cl.leiden((np.array([0, 1]), np.array([5], dtype=np.int32), np.array([1.0])), check_symmetry=False)
+
+
+def test_return_info():
+    g, _ = planted()
+    labels, info = cl.leiden(g, seed=1, return_info=True)
+    assert np.array_equal(labels, cl.leiden(g, seed=1))
+    assert info["converged"] and info["stop"] == "converged" and info["iterations"] >= 1
+    assert info["modularity"] == pytest.approx(cl.modularity(g, labels), abs=1e-12)
+    _, one = cl.leiden(g, seed=1, n_iterations=1, return_info=True)
+    assert one["iterations"] == 1 and one["stop"] == "n_iterations" and not one["converged"]

@@ -61,7 +61,7 @@ fn edges_csr_rs(from: &[f64], to: &[f64], w: &[f64], n: i32) -> List {
 #[extendr]
 #[allow(clippy::too_many_arguments)]
 fn leiden_rs(p: &[i32], i: &[i32], x: &[f64], resolution: f64, seed: f64, n_iterations: i32, theta: f64, min_gain: f64,
-             threads: i32, check_symmetry: bool) -> Vec<i32> {
+             threads: i32, check_symmetry: bool) -> List {
     let g = graph(p, i, x, check_symmetry);
     let o = dl::Options {
         resolution,
@@ -72,7 +72,14 @@ fn leiden_rs(p: &[i32], i: &[i32], x: &[f64], resolution: f64, seed: f64, n_iter
         threads: (threads > 0).then_some(threads as usize), // 0: NULL on the R side
         ..Default::default()
     };
-    dl::leiden(&g, &o).iter().map(|&l| l as i32 + 1).collect()
+    let r = dl::leiden_run(&g, &o);
+    let stop = match r.stop {
+        dl::Stop::Converged => "converged",
+        dl::Stop::MinGain => "min_gain",
+        dl::Stop::IterationCap => "n_iterations",
+    };
+    let labels: Vec<i32> = r.labels.iter().map(|&l| l as i32 + 1).collect();
+    list!(labels = labels, iterations = r.iterations as i32, stop = stop, modularity = r.modularity)
 }
 
 /// @keywords internal

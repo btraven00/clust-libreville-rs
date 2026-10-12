@@ -75,7 +75,43 @@ const MAX_LEVELS: u64 = 1000;
 
 /// Community labels 0.., ordered by community size (largest first), then by smallest member.
 pub fn leiden(g: &Graph, o: &Options) -> Vec<u32> {
-    run(g, o, None)
+    run(g, o, None).0
+}
+
+/// Why a run stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// The last iteration changed nothing: a fixed point.
+    Converged,
+    /// `min_gain`: the last iteration gained less modularity than that.
+    MinGain,
+    /// `n_iterations` iterations ran, the last of which still changed something.
+    IterationCap,
+}
+
+/// A run's labels and how it ended.
+#[derive(Clone, Debug)]
+pub struct LeidenRun {
+    pub labels: Vec<u32>,
+    /// Leiden iterations run (the last one included).
+    pub iterations: usize,
+    pub stop: Stop,
+    /// Modularity of `labels` at the run's resolution.
+    pub modularity: f64,
+}
+
+impl LeidenRun {
+    /// Whether the run reached a fixed point (its last iteration changed nothing).
+    pub fn converged(&self) -> bool {
+        self.stop == Stop::Converged
+    }
+}
+
+/// `leiden`, with how the run ended: iterations, why it stopped, modularity.
+pub fn leiden_run(g: &Graph, o: &Options) -> LeidenRun {
+    let (labels, iterations, stop) = run(g, o, None);
+    let modularity = modularity(g, &labels, o.resolution);
+    LeidenRun { labels, iterations, stop, modularity }
 }
 
 /// `leiden`, plus the hash of every level's graph (structure and exact weight bits), in order:
@@ -83,7 +119,7 @@ pub fn leiden(g: &Graph, o: &Options) -> Vec<u32> {
 #[doc(hidden)]
 pub fn leiden_traced(g: &Graph, o: &Options) -> (Vec<u32>, Vec<u64>) {
     let mut h = Vec::new();
-    let l = run(g, o, Some(&mut h));
+    let l = run(g, o, Some(&mut h)).0;
     (l, h)
 }
 
@@ -97,6 +133,7 @@ pub fn leiden_gpu(g: &Graph, o: &Options) -> Vec<u32> {
         Repr::F32(c) => iterate(&gpu, c, o, None),
         Repr::F64(c) => iterate(&gpu, c, o, None),
     })
+    .0
 }
 
 fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
@@ -120,23 +157,26 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
     pool.install(f)
 }
 
-fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> (Vec<u32>, usize, Stop) {
     with_pool(o, || match &g.0 {
         Repr::F32(c) => iterate(&Cpu, c, o, hashes),
         Repr::F64(c) => iterate(&Cpu, c, o, hashes),
     })
 }
 
-fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> Vec<u32> {
+/// The iterations; returns the labels, the iterations run and why it stopped.
+fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Option<&mut Vec<u64>>) -> (Vec<u32>, usize, Stop) {
     let up = b.upload(g);
     let mut labels: Vec<u32> = (0..g.n() as u32).collect();
     let cap = if o.n_iterations < 0 { MAX_ITERATIONS } else { o.n_iterations };
     let watch_gain = o.n_iterations < 0 && o.min_gain > 0.0;
     let mut q = f64::NEG_INFINITY;
+    let mut stop = Stop::IterationCap;
     for it in 0..cap {
         let t = std::time::Instant::now();
         let next = canonical(&iteration(b, &up, &labels, o, it as u64, hashes.as_deref_mut()));
-        let mut done = next == labels;
+        let unchanged = next == labels;
+        let mut done = unchanged;
         if watch_gain || std::env::var_os("DETLEIDEN_TRACE").is_some() {
             let q_next = modularity_csr(g, &next, o.resolution);
             if std::env::var_os("DETLEIDEN_TRACE").is_some() {
@@ -147,12 +187,13 @@ fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Op
             q = q_next;
         }
         labels = next;
+        stop = if unchanged { Stop::Converged } else if done { Stop::MinGain } else { Stop::IterationCap };
         if done && o.n_iterations < 0 {
-            return labels;
+            return (labels, it as usize + 1, stop);
         }
     }
     assert!(o.n_iterations >= 0, "Leiden did not converge in {MAX_ITERATIONS} iterations");
-    labels
+    (labels, cap as usize, stop)
 }
 
 /// One Leiden iteration from `start`: move, refine, aggregate, until no level aggregates.

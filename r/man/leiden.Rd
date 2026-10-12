@@ -16,10 +16,11 @@ leiden(x, ...)
   theta = 0.01,
   min_gain = 0,
   threads = NULL,
-  check_symmetry = TRUE
+  check_symmetry = TRUE,
+  details = FALSE
 )
 
-\S4method{leiden}{SingleCellExperiment}(x, use.dimred = "PCA", k = 10L, type = "rank", ...)
+\S4method{leiden}{SingleCellExperiment}(x, use.dimred = "PCA", k = 10L, type = "rank", details = FALSE, ...)
 }
 \arguments{
 \item{x}{A graph or a \code{SingleCellExperiment}.
@@ -55,6 +56,8 @@ result.}
 only that check, for graphs symmetric by construction (Seurat, scanpy,
 bluster); bounds and weights are always validated.}
 
+\item{details}{Also return how the run ended (see Value).}
+
 \item{use.dimred}{Name of the reduced dimension to build the graph from.}
 
 \item{k}{Number of nearest neighbours for the SNN graph.}
@@ -66,7 +69,11 @@ bluster); bounds and weights are always validated.}
 For a graph: integer community labels \verb{1..k}, community 1 the
 largest (ties: by smallest vertex), named by the graph's row names if it
 has them. For a \code{SingleCellExperiment}: the same labels as a factor named
-by cell, e.g. for \code{colLabels(sce) <- leiden(sce)}.
+by cell, e.g. for \code{colLabels(sce) <- leiden(sce)}. With \code{details = TRUE},
+a list: \code{labels} (as above), \code{iterations} (Leiden iterations run),
+\code{converged} (whether the last iteration changed nothing: a fixed point),
+\code{stop} (why it stopped: \code{"converged"}, \code{"min_gain"} or \code{"n_iterations"})
+and \code{modularity}.
 }
 \description{
 Leiden (Traag, Waltman & van Eck 2019) maximising modularity at resolution

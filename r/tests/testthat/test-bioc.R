@@ -48,6 +48,9 @@ test_that("leiden(<SingleCellExperiment>) clusters its SNN graph", {
     SingleCellExperiment::colLabels(sce) <- cl
     expect_identical(SingleCellExperiment::colLabels(sce), cl)
     expect_error(leiden(sce, use.dimred = "UMAP"))
+    d <- leiden(sce, seed = 1, details = TRUE)
+    expect_identical(d$labels, cl)
+    expect_true(d$converged)
 })
 
 test_that("igraph input via the edge list equals its adjacency matrix", {

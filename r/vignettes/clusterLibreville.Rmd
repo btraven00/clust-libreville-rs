@@ -101,6 +101,8 @@ table(bluster::clusterRows(pcs, param))
 * `min_gain`: with `n_iterations = -1`, also stop once an iteration gains less
     modularity than this.
 * `threads`: worker threads (default: all cores); does not change the result.
+* `details = TRUE`: also return how the run ended (iterations, whether it
+  converged, why it stopped, modularity).
 
 # Session information
 

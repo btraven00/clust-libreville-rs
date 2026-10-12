@@ -85,3 +85,16 @@ test_that("check_symmetry = FALSE skips only the symmetry check", {
     expect_length(leiden(a, check_symmetry = FALSE), 10)
     expect_error(leiden(a), "symmetric")
 })
+
+test_that("details = TRUE reports how the run ended", {
+    m <- planted()
+    d <- leiden(m, seed = 1, details = TRUE)
+    expect_identical(d$labels, leiden(m, seed = 1))
+    expect_true(d$converged)
+    expect_identical(d$stop, "converged")
+    expect_equal(d$modularity, modularity(m, d$labels), tolerance = 1e-12)
+    one <- leiden(m, seed = 1, n_iterations = 1, details = TRUE)
+    expect_identical(one$iterations, 1L)
+    expect_false(one$converged)
+    expect_identical(one$stop, "n_iterations")
+})

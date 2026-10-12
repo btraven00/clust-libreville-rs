@@ -35,7 +35,8 @@ def _csr(graph):
 
 
 def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int = -1, theta: float = 0.01,
-           min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True) -> np.ndarray:
+           min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True,
+           return_info: bool = False):
     """Leiden communities of an undirected weighted graph, maximising modularity.
 
     Parameters
@@ -60,14 +61,23 @@ def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int =
         symmetric by construction (scanpy's connectivities); bounds and weights are always
         validated, and an asymmetric graph then gives meaningless labels, never a crash.
 
+    return_info
+        Also return how the run ended (see Returns).
+
     Returns
     -------
-    int32 labels ``0..k-1``, community 0 the largest (ties: by smallest vertex).
+    int32 labels ``0..k-1``, community 0 the largest (ties: by smallest vertex). With
+    ``return_info=True``, ``(labels, info)``: ``info["iterations"]`` (Leiden iterations run),
+    ``info["converged"]`` (the last iteration changed nothing), ``info["stop"]`` ("converged",
+    "min_gain" or "n_iterations": why it stopped) and ``info["modularity"]``.
     """
     if threads is not None and threads < 1:
         raise ValueError("threads must be >= 1 or None")
-    return leiden_csr(*_csr(graph), float(resolution), int(seed), int(n_iterations), float(theta), float(min_gain),
-                      threads, bool(check_symmetry))
+    labels, iterations, stop, q = leiden_csr(*_csr(graph), float(resolution), int(seed), int(n_iterations),
+                                             float(theta), float(min_gain), threads, bool(check_symmetry))
+    if not return_info:
+        return labels
+    return labels, {"iterations": iterations, "converged": stop == "converged", "stop": stop, "modularity": q}
 
 
 def edges_to_csr(src, dst, weight=None, n: int | None = None):

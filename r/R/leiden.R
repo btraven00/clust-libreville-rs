@@ -49,6 +49,7 @@
 #' @param check_symmetry Verify that the matrix is symmetric. `FALSE` skips
 #'   only that check, for graphs symmetric by construction (Seurat, scanpy,
 #'   bluster); bounds and weights are always validated.
+#' @param details Also return how the run ended (see Value).
 #' @param use.dimred Name of the reduced dimension to build the graph from.
 #' @param k Number of nearest neighbours for the SNN graph.
 #' @param type Edge weighting of the SNN graph, as in
@@ -57,7 +58,11 @@
 #' @return For a graph: integer community labels `1..k`, community 1 the
 #'   largest (ties: by smallest vertex), named by the graph's row names if it
 #'   has them. For a `SingleCellExperiment`: the same labels as a factor named
-#'   by cell, e.g. for `colLabels(sce) <- leiden(sce)`.
+#'   by cell, e.g. for `colLabels(sce) <- leiden(sce)`. With `details = TRUE`,
+#'   a list: `labels` (as above), `iterations` (Leiden iterations run),
+#'   `converged` (whether the last iteration changed nothing: a fixed point),
+#'   `stop` (why it stopped: `"converged"`, `"min_gain"` or `"n_iterations"`)
+#'   and `modularity`.
 #' @seealso [cluster_libreville()] for igraph and bluster.
 #' @examples
 #' f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
@@ -79,17 +84,21 @@ setGeneric("leiden", function(x, ...) standardGeneric("leiden"))
 setMethod("leiden", "ANY", function(x, resolution = 1, seed = 0,
                                     n_iterations = -1L, theta = 0.01,
                                     min_gain = 0, threads = NULL,
-                                    check_symmetry = TRUE) {
+                                    check_symmetry = TRUE, details = FALSE) {
     m <- .as_graph(x)
     stopifnot(seed >= 0, seed < 2^53, seed == floor(seed),
                 is.null(threads) || threads >= 1)
-    r <- leiden_rs(m$p, m$i, m$x, as.double(resolution), as.double(seed),
+    run <- leiden_rs(m$p, m$i, m$x, as.double(resolution), as.double(seed),
                     as.integer(n_iterations), as.double(theta),
                     as.double(min_gain),
                     if (is.null(threads)) 0L else as.integer(threads),
                     isTRUE(check_symmetry))
+    r <- run$labels
     if (!is.null(m$names)) names(r) <- m$names
-    r
+    if (!isTRUE(details)) return(r)
+    list(labels = r, iterations = run$iterations,
+         converged = run$stop == "converged", stop = run$stop,
+         modularity = run$modularity)
 })
 
 #' @rdname leiden
@@ -99,10 +108,14 @@ setMethod("leiden", "ANY", function(x, resolution = 1, seed = 0,
 #' @export
 setMethod("leiden", "SingleCellExperiment", function(x, use.dimred = "PCA",
                                                         k = 10L, type = "rank",
-                                                        ...) {
+                                                        details = FALSE, ...) {
     g <- makeSNNGraph(reducedDim(x, use.dimred), k = k, type = type)
-    labels <- leiden(g, check_symmetry = FALSE, ...) # symmetric by construction
-    factor(setNames(labels, colnames(x)), levels = seq_len(max(labels)))
+    run <- leiden(g, check_symmetry = FALSE, details = TRUE, ...) # symmetric
+    labels <- factor(setNames(run$labels, colnames(x)),
+                     levels = seq_len(max(run$labels)))
+    if (!isTRUE(details)) return(labels)
+    run$labels <- labels
+    run
 })
 
 #' Modularity of a partition

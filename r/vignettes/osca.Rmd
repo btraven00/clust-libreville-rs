@@ -123,6 +123,18 @@ round(agree, 3)
 Because every run is reproducible and cheap, many seeds (or resolutions) can be
 run and summarised, e.g. into a consensus or a per-cell stability score.
 
+# Did it converge?
+
+`details = TRUE` returns how the run ended: the iterations it took, whether the
+last one changed nothing (a fixed point), why it stopped, and the modularity.
+By default Leiden runs until an iteration changes nothing; with a fixed
+`n_iterations` it may stop before:
+
+```{r converged}
+str(leiden(sce, seed = 0, details = TRUE)[-1])
+str(leiden(sce, seed = 0, n_iterations = 1, details = TRUE)[-1])
+```
+
 # Resolution
 
 Higher resolutions give more, smaller clusters:
@@ -178,30 +190,48 @@ igraph's defaults apply: the *CPM* objective at resolution 1 (not modularity)
 and 2 iterations. Each choice on the same graph:
 
 ```{r compare}
-pcs <- reducedDim(sce, "PCA")
 choices <- list(
-    "walktrap (OSCA default)" = bluster::SNNGraphParam(cluster.fun = "walktrap"),
-    "igraph leiden, defaults (CPM)" = bluster::SNNGraphParam(cluster.fun = "leiden"),
-    "igraph leiden, modularity" = bluster::SNNGraphParam(
-        cluster.fun = "leiden",
-        cluster.args = list(objective_function = "modularity")),
-    "clusterLibreville" = bluster::SNNGraphParam(
-        cluster.fun = cluster_libreville, cluster.args = list(seed = 0)))
-labels <- lapply(choices, function(p) {
-    set.seed(0)
-    bluster::clusterRows(pcs, p)
+    "walktrap (OSCA default)" = function(g) igraph::cluster_walktrap(g),
+    "igraph leiden, defaults (CPM)" = function(g) igraph::cluster_leiden(g),
+    "igraph leiden, modularity, 2 iterations" = function(g)
+        igraph::cluster_leiden(g, objective_function = "modularity"),
+    "clusterLibreville, 2 iterations" = function(g)
+        cluster_libreville(g, seed = 0, n_iterations = 2),
+    "igraph leiden, modularity, converged" = function(g)
+        igraph::cluster_leiden(g, objective_function = "modularity",
+                               n_iterations = -1),
+    "clusterLibreville, converged" = function(g)
+        cluster_libreville(g, seed = 0))
+run <- lapply(choices, function(f) {
+    # clustering only, on the SNN graph built above; best of 3
+    secs <- vapply(1:3, function(i) {
+        set.seed(0)
+        system.time(comm <<- f(g))[["elapsed"]]
+    }, numeric(1))
+    list(labels = factor(igraph::membership(comm)), seconds = min(secs))
 })
+labels <- lapply(run, `[[`, "labels")
 ari <- function(a, b) bluster::pairwiseRand(a, b, mode = "index")
 data.frame(clusters = vapply(labels, nlevels, integer(1)),
            ARI_types = vapply(labels, ari, numeric(1), b = sce$level1class),
            ARI_libreville = vapply(labels, ari, numeric(1),
-                                   b = labels$clusterLibreville),
+                                   b = labels[["clusterLibreville, converged"]]),
            modularity = vapply(labels, function(l) modularity(g, l),
-                               numeric(1)))
+                               numeric(1)),
+           seconds = vapply(run, `[[`, numeric(1), "seconds"))
 ```
 
 With the modularity objective, igraph's Leiden and `clusterLibreville` find
-essentially the same partition. Leiden through bluster with its default
+essentially the same partition, at 2 iterations (igraph's default) and run to
+convergence (`n_iterations = -1`; igraph's R package converges, but
+python-igraph up to 0.11.9 runs a single iteration for -1). Times are for the
+clustering step alone, on the machine that built this vignette; igraph runs on
+one thread and `clusterLibreville` on all cores. At 2 iterations the two take
+about the same time; run to convergence, igraph is the faster on a graph this
+small (`r ncol(sce)` cells). `clusterLibreville`'s advantage is reproducibility
+at any number of threads, and speed on large graphs.
+
+Leiden through bluster with its default
 arguments optimises CPM instead and splits the data into many small clusters:
 pass `objective_function = "modularity"` (or a CPM resolution suited to the
 graph's weights) when using it. Walktrap is a different algorithm, with its own
