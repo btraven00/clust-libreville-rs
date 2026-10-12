@@ -165,7 +165,9 @@ cluster_libreville <- function(graph, ...) {
                             modularity = modularity(graph, labels))
 }
 
-#' Pick the resolution by CHAMP
+#' Pick the resolution by CHAMP (experimental)
+#'
+#' Experimental: the interface and the scores may change.
 #'
 #' Runs [leiden()] at every pair of `resolutions` x `seeds`, then keeps the
 #' partitions that have the highest modularity among that pool somewhere in

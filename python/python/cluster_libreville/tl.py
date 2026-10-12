@@ -50,7 +50,7 @@ def champ(adata, resolutions=None, seeds=None, *, gamma_range=None, key_added: s
           neighbors_key: str | None = None, obsp: str | None = None, n_iterations: int = -1, theta: float = 0.01,
           min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True, metric: str = "nvi",
           copy: bool = False):
-    """Pick the resolution by CHAMP: :func:`cluster_libreville.champ` on the cells' graph (as :func:`leiden`).
+    """Experimental: the API and the scores may change. Pick the resolution by CHAMP: :func:`cluster_libreville.champ` on the cells' graph (as :func:`leiden`).
 
     ``resolutions`` (default ``np.logspace(-1, 1, 20)``) x ``seeds`` (default ``np.arange(5)``) is the grid
     of Leiden runs. Writes the partition with the widest domain (in log resolution) to

@@ -70,7 +70,9 @@ is where a determinism bug lives.
     to strict convergence (below).
   - `Stop::{Converged, MinGain, IterationCap}` says which.
 
-## Ensembles: CHAMP and agreement
+## Ensembles: CHAMP and agreement (experimental)
+
+The interface and the scores may change.
 
 `champ` (`src/champ.rs`) implements CHAMP (Weir, Emmons, Gibson, Taylor & Mucha 2017,
 doi:10.3390/a10030093). For a fixed partition, modularity is a line in γ, Q(γ) = a − γb

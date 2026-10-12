@@ -24,7 +24,7 @@ cl.tl.leiden(adata, resolution=1.0, random_state=0)
 # an undirected edge list: polars / pandas / pyarrow / numpy columns
 labels = cl.leiden_edges(df["src"], df["dst"], df["weight"], seed=0)
 
-# pick the resolution (CHAMP): Leiden over resolutions x seeds, keep the partitions that are best somewhere
+# experimental, the API may change. Pick the resolution (CHAMP): Leiden over resolutions x seeds, keep the partitions that are best somewhere
 c = cl.champ(graph, np.logspace(-1, 1, 20), seeds=np.arange(5))  # metric="nvi" (default) or "ami"
 c.labels[c.best]  # the widest resolution range; c.to_seeds near 0 = stable across seeds
 cl.tl.champ(adata)  # scanpy-style: adata.obs["champ"], adata.uns["champ"]["domains"]

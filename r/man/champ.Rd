@@ -2,7 +2,7 @@
 % Please edit documentation in R/leiden.R
 \name{champ}
 \alias{champ}
-\title{Pick the resolution by CHAMP}
+\title{Pick the resolution by CHAMP (experimental)}
 \usage{
 champ(
   graph,
@@ -50,6 +50,9 @@ community 1 the largest); and \code{best}, the row of \code{domains} with the
 widest interval in log resolution, e.g. \code{labels[, best]}.
 }
 \description{
+Experimental: the interface and the scores may change.
+}
+\details{
 Runs \code{\link[=leiden]{leiden()}} at every pair of \code{resolutions} x \code{seeds}, then keeps the
 partitions that have the highest modularity among that pool somewhere in
 \code{gamma_range}, each with its interval of resolutions (CHAMP: Weir et al.
