@@ -18,6 +18,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
+[project.urls]
+Repository = "https://github.com/btraven00/clust-libreville-rs"
+Issues = "https://github.com/btraven00/clust-libreville-rs/issues"
+
 [project.optional-dependencies]
 scanpy = ["anndata", "pandas"]
 test = ["pytest", "scipy"]

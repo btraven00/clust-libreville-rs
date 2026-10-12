@@ -11,6 +11,8 @@ Description: A parallel and deterministic implementation of the Leiden
     sparse matrices, Seurat graphs and igraph graphs, and as a bluster
     clustering function.
 License: MIT + file LICENSE
+URL: https://github.com/btraven00/clust-libreville-rs
+BugReports: https://github.com/btraven00/clust-libreville-rs/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 8.0.0
