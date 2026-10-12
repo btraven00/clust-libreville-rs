@@ -7,11 +7,8 @@
 modularity(graph, membership, resolution = 1)
 }
 \arguments{
-\item{graph}{Undirected weighted graph: a symmetric sparse matrix (anything
-\code{methods::as(graph, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat
-\code{Graph} such as \code{obj@graphs$RNA_snn}, a symmetric \code{dsCMatrix}, a pattern
-matrix) or an igraph graph (edge attribute \code{weight} if present, e.g. from
-\code{scran::buildSNNGraph()} or \code{bluster::makeSNNGraph()}).}
+\item{graph}{Undirected weighted graph: a symmetric sparse matrix or an
+igraph graph, as for \code{\link[=leiden]{leiden()}}.}
 
 \item{membership}{Labels, one per vertex (any atomic type).}
 

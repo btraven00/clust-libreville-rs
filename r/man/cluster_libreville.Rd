@@ -24,9 +24,7 @@ clustering, e.g.
 \code{bluster::clusterRows(pcs, SNNGraphParam(cluster.fun = cluster_libreville))}.
 }
 \examples{
-if (requireNamespace("igraph", quietly = TRUE)) {
-    g <- igraph::make_graph("Zachary")
-    comm <- cluster_libreville(g, seed = 1)
-    igraph::sizes(comm)
-}
+g <- igraph::make_graph("Zachary")
+comm <- cluster_libreville(g, seed = 1)
+igraph::sizes(comm)
 }

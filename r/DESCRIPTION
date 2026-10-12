@@ -20,15 +20,16 @@ biocViews: Clustering, SingleCell, GraphAndNetwork, Network, Software
 Depends:
     R (>= 4.6.0)
 Imports:
-    Matrix,
-    methods
-Suggests:
-    BiocStyle,
     bluster,
     igraph,
+    Matrix,
+    methods,
+    SingleCellExperiment,
+    stats
+Suggests:
+    BiocStyle,
     knitr,
     rmarkdown,
-    SingleCellExperiment,
     testthat (>= 3.0.0)
 VignetteBuilder: knitr
 Config/testthat/edition: 3

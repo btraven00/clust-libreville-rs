@@ -24,16 +24,28 @@ test_that("bluster: SNNGraphParam(cluster.fun = cluster_libreville)", {
     expect_identical(cl, bluster::clusterRows(pcs, p)) # deterministic
 })
 
-test_that("SingleCellExperiment workflow: colLabels from an SNN graph", {
-    skip_if_not_installed("SingleCellExperiment")
-    skip_if_not_installed("bluster")
+two_blobs_sce <- function() {
     set.seed(1)
     pcs <- rbind(matrix(rnorm(400, 0), ncol = 4),
                     matrix(rnorm(400, 6), ncol = 4))
-    sce <- SingleCellExperiment::SingleCellExperiment(
-        assays = list(counts = matrix(0, 3, 200)),
+    SingleCellExperiment::SingleCellExperiment(
+        assays = list(counts = matrix(
+            0, 3, 200, dimnames = list(NULL, paste0("c", 1:200)))),
         reducedDims = list(PCA = pcs))
-    g <- bluster::makeSNNGraph(SingleCellExperiment::reducedDim(sce, "PCA"))
-    SingleCellExperiment::colLabels(sce) <- factor(leiden(g, seed = 1))
-    expect_equal(nlevels(SingleCellExperiment::colLabels(sce)), 2)
+}
+
+test_that("leiden(<SingleCellExperiment>) clusters its SNN graph", {
+    sce <- two_blobs_sce()
+    cl <- leiden(sce, seed = 1)
+    expect_s3_class(cl, "factor")
+    expect_identical(names(cl), colnames(sce))
+    expect_equal(nlevels(cl), 2)
+    pcs <- SingleCellExperiment::reducedDim(sce, "PCA")
+    g <- bluster::makeSNNGraph(pcs, k = 10, type = "rank")
+    expect_identical(as.integer(cl), unname(leiden(g, seed = 1)))
+    expect_identical(leiden(sce, seed = 1, threads = 1),
+                        leiden(sce, seed = 1, threads = 4))
+    SingleCellExperiment::colLabels(sce) <- cl
+    expect_identical(SingleCellExperiment::colLabels(sce), cl)
+    expect_error(leiden(sce, use.dimred = "UMAP"))
 })

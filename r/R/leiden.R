@@ -17,11 +17,15 @@
 #' `resolution`, seeded and deterministic: the same `seed` gives the same
 #' labels at any number of threads.
 #'
-#' @param graph Undirected weighted graph: a symmetric sparse matrix (anything
-#'   `methods::as(graph, "CsparseMatrix")` accepts: a `dgCMatrix`, a Seurat
-#'   `Graph` such as `obj@graphs$RNA_snn`, a symmetric `dsCMatrix`, a pattern
-#'   matrix) or an igraph graph (edge attribute `weight` if present, e.g. from
-#'   `scran::buildSNNGraph()` or `bluster::makeSNNGraph()`).
+#' @param x A graph or a `SingleCellExperiment`.
+#'   * Graph: undirected and weighted, a symmetric sparse matrix (anything
+#'     `methods::as(x, "CsparseMatrix")` accepts: a `dgCMatrix`, a Seurat
+#'     `Graph` such as `obj@graphs$RNA_snn`, a symmetric `dsCMatrix`, a pattern
+#'     matrix) or an igraph graph (edge attribute `weight` if present, e.g.
+#'     from `scran::buildSNNGraph()` or `bluster::makeSNNGraph()`).
+#'   * `SingleCellExperiment`: the cells are clustered on a shared nearest
+#'     neighbour graph of `reducedDim(x, use.dimred)`, built by
+#'     [bluster::makeSNNGraph()].
 #' @param resolution Resolution of the modularity (gamma).
 #' @param seed Seed, a non-negative whole number below 2^53.
 #' @param n_iterations Leiden iterations; -1: until an iteration changes
@@ -34,19 +38,38 @@
 #' @param check_symmetry Verify that the matrix is symmetric. `FALSE` skips
 #'   only that check, for graphs symmetric by construction (Seurat, scanpy,
 #'   bluster); bounds and weights are always validated.
-#' @return Integer community labels `1..k`, community 1 the largest (ties: by
-#'   smallest vertex), named by the graph's row names if it has them.
+#' @param use.dimred Name of the reduced dimension to build the graph from.
+#' @param k Number of nearest neighbours for the SNN graph.
+#' @param type Edge weighting of the SNN graph, as in
+#'   [bluster::makeSNNGraph()]: `"rank"`, `"number"` or `"jaccard"`.
+#' @param ... Arguments for the graph method (`resolution`, `seed`, ...).
+#' @return For a graph: integer community labels `1..k`, community 1 the
+#'   largest (ties: by smallest vertex), named by the graph's row names if it
+#'   has them. For a `SingleCellExperiment`: the same labels as a factor named
+#'   by cell, e.g. for `colLabels(sce) <- leiden(sce)`.
 #' @seealso [cluster_libreville()] for igraph and bluster.
 #' @examples
 #' f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 #' g <- Matrix::readMM(f)
 #' labels <- leiden(g, resolution = 1, seed = 0)
 #' table(labels)
+#'
+#' sce <- SingleCellExperiment::SingleCellExperiment(
+#'     assays = list(counts = matrix(0, 2, 200)),
+#'     reducedDims = list(PCA = rbind(matrix(rnorm(400), ncol = 4),
+#'                                    matrix(rnorm(400, 5), ncol = 4))))
+#' SingleCellExperiment::colLabels(sce) <- leiden(sce, seed = 1)
+#' table(SingleCellExperiment::colLabels(sce))
 #' @export
-leiden <- function(graph, resolution = 1, seed = 0, n_iterations = -1L,
-                    theta = 0.01, min_gain = 0, threads = NULL,
-                   check_symmetry = TRUE) {
-    m <- .as_graph(graph)
+setGeneric("leiden", function(x, ...) standardGeneric("leiden"))
+
+#' @rdname leiden
+#' @export
+setMethod("leiden", "ANY", function(x, resolution = 1, seed = 0,
+                                    n_iterations = -1L, theta = 0.01,
+                                    min_gain = 0, threads = NULL,
+                                    check_symmetry = TRUE) {
+    m <- .as_graph(x)
     stopifnot(seed >= 0, seed < 2^53, seed == floor(seed),
                 is.null(threads) || threads >= 1)
     r <- leiden_rs(m@p, m@i, m@x, as.double(resolution), as.double(seed),
@@ -56,15 +79,30 @@ leiden <- function(graph, resolution = 1, seed = 0, n_iterations = -1L,
                     isTRUE(check_symmetry))
     if (!is.null(rownames(m))) names(r) <- rownames(m)
     r
-}
+})
+
+#' @rdname leiden
+#' @importFrom SingleCellExperiment reducedDim
+#' @importFrom bluster makeSNNGraph
+#' @importFrom stats setNames
+#' @export
+setMethod("leiden", "SingleCellExperiment", function(x, use.dimred = "PCA",
+                                                        k = 10L, type = "rank",
+                                                        ...) {
+    g <- makeSNNGraph(reducedDim(x, use.dimred), k = k, type = type)
+    labels <- leiden(g, check_symmetry = FALSE, ...) # symmetric by construction
+    factor(setNames(labels, colnames(x)), levels = seq_len(max(labels)))
+})
 
 #' Modularity of a partition
 #'
 #' Newman's modularity at resolution `resolution`, summed in a fixed order
 #' (the quantity [leiden()] maximises).
 #'
-#' @inheritParams leiden
+#' @param graph Undirected weighted graph: a symmetric sparse matrix or an
+#'   igraph graph, as for [leiden()].
 #' @param membership Labels, one per vertex (any atomic type).
+#' @param resolution Resolution of the modularity (gamma).
 #' @return A number.
 #' @examples
 #' f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
@@ -92,16 +130,11 @@ modularity <- function(graph, membership, resolution = 1) {
 #' @return An igraph `communities` object (`igraph::membership()`,
 #'   `igraph::modularity()` and `igraph::sizes()` work on it).
 #' @examples
-#' if (requireNamespace("igraph", quietly = TRUE)) {
-#'     g <- igraph::make_graph("Zachary")
-#'     comm <- cluster_libreville(g, seed = 1)
-#'     igraph::sizes(comm)
-#' }
+#' g <- igraph::make_graph("Zachary")
+#' comm <- cluster_libreville(g, seed = 1)
+#' igraph::sizes(comm)
 #' @export
 cluster_libreville <- function(graph, ...) {
-    if (!requireNamespace("igraph", quietly = TRUE)) {
-        stop("cluster_libreville() needs the igraph package")
-    }
     labels <- leiden(graph, ...)
     igraph::make_clusters(graph, membership = unname(labels),
                             algorithm = "clusterLibreville",

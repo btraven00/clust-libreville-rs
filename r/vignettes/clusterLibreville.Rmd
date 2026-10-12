@@ -11,8 +11,6 @@ vignette: >
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
-has <- function(p) requireNamespace(p, quietly = TRUE)
-bioc <- has("bluster") && has("SingleCellExperiment")
 ```
 
 # Introduction
@@ -20,9 +18,9 @@ bioc <- has("bluster") && has("SingleCellExperiment")
 Leiden clustering of a cell-cell neighbour graph is a standard step of
 single-cell analysis. Most implementations are either sequential or, when
 parallel, nondeterministic: the labels change with the number of threads.
-`clusterLibreville` is a parallel Leiden whose result depends only on the graph, the
-options and the seed. The same seed gives the same labels on a laptop and on
-a many-core server.
+`clusterLibreville` is a parallel Leiden whose result depends only on the graph,
+the options and the seed. The same seed gives the same labels on a laptop and
+on a many-core server.
 
 # Installation
 
@@ -69,26 +67,25 @@ vapply(c(0.5, 1, 2), function(r) max(leiden(g, resolution = r)), integer(1))
 
 # Bioconductor workflows
 
-Any symmetric sparse matrix or igraph graph works as input, for example the
-shared-nearest-neighbour graph of `scran::buildSNNGraph()` or
-`bluster::makeSNNGraph()` on a `SingleCellExperiment`'s PCA:
+On a `SingleCellExperiment`, `leiden()` clusters the shared nearest neighbour
+graph of a reduced dimension (built by `bluster::makeSNNGraph()`) and returns a
+factor, ready for `colLabels()`:
 
-```{r sce, eval = bioc}
+```{r sce}
 library(SingleCellExperiment)
 set.seed(1)
 pcs <- rbind(matrix(rnorm(1000, 0), ncol = 10),
                 matrix(rnorm(1000, 3), ncol = 10))
 sce <- SingleCellExperiment(assays = list(counts = matrix(0, 5, 200)),
                             reducedDims = list(PCA = pcs))
-snn <- bluster::makeSNNGraph(reducedDim(sce, "PCA"))
-colLabels(sce) <- factor(leiden(snn, seed = 1))
+colLabels(sce) <- leiden(sce, use.dimred = "PCA", k = 10, seed = 1)
 table(colLabels(sce))
 ```
 
 `cluster_libreville()` has igraph's community-function interface, so it plugs
 into bluster's graph-based clustering:
 
-```{r bluster, eval = bioc}
+```{r bluster}
 param <- bluster::SNNGraphParam(k = 10, cluster.fun = cluster_libreville,
                                 cluster.args = list(resolution = 1, seed = 1))
 table(bluster::clusterRows(pcs, param))

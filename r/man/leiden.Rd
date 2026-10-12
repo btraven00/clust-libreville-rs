@@ -2,10 +2,14 @@
 % Please edit documentation in R/leiden.R
 \name{leiden}
 \alias{leiden}
+\alias{leiden,ANY-method}
+\alias{leiden,SingleCellExperiment-method}
 \title{Deterministic Leiden community detection}
 \usage{
-leiden(
-  graph,
+leiden(x, ...)
+
+\S4method{leiden}{ANY}(
+  x,
   resolution = 1,
   seed = 0,
   n_iterations = -1L,
@@ -14,13 +18,23 @@ leiden(
   threads = NULL,
   check_symmetry = TRUE
 )
+
+\S4method{leiden}{SingleCellExperiment}(x, use.dimred = "PCA", k = 10L, type = "rank", ...)
 }
 \arguments{
-\item{graph}{Undirected weighted graph: a symmetric sparse matrix (anything
-\code{methods::as(graph, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat
+\item{x}{A graph or a \code{SingleCellExperiment}.
+\itemize{
+\item Graph: undirected and weighted, a symmetric sparse matrix (anything
+\code{methods::as(x, "CsparseMatrix")} accepts: a \code{dgCMatrix}, a Seurat
 \code{Graph} such as \code{obj@graphs$RNA_snn}, a symmetric \code{dsCMatrix}, a pattern
-matrix) or an igraph graph (edge attribute \code{weight} if present, e.g. from
-\code{scran::buildSNNGraph()} or \code{bluster::makeSNNGraph()}).}
+matrix) or an igraph graph (edge attribute \code{weight} if present, e.g.
+from \code{scran::buildSNNGraph()} or \code{bluster::makeSNNGraph()}).
+\item \code{SingleCellExperiment}: the cells are clustered on a shared nearest
+neighbour graph of \code{reducedDim(x, use.dimred)}, built by
+\code{\link[bluster:makeSNNGraph]{bluster::makeSNNGraph()}}.
+}}
+
+\item{...}{Arguments for the graph method (\code{resolution}, \code{seed}, ...).}
 
 \item{resolution}{Resolution of the modularity (gamma).}
 
@@ -40,10 +54,19 @@ result.}
 \item{check_symmetry}{Verify that the matrix is symmetric. \code{FALSE} skips
 only that check, for graphs symmetric by construction (Seurat, scanpy,
 bluster); bounds and weights are always validated.}
+
+\item{use.dimred}{Name of the reduced dimension to build the graph from.}
+
+\item{k}{Number of nearest neighbours for the SNN graph.}
+
+\item{type}{Edge weighting of the SNN graph, as in
+\code{\link[bluster:makeSNNGraph]{bluster::makeSNNGraph()}}: \code{"rank"}, \code{"number"} or \code{"jaccard"}.}
 }
 \value{
-Integer community labels \verb{1..k}, community 1 the largest (ties: by
-smallest vertex), named by the graph's row names if it has them.
+For a graph: integer community labels \verb{1..k}, community 1 the
+largest (ties: by smallest vertex), named by the graph's row names if it
+has them. For a \code{SingleCellExperiment}: the same labels as a factor named
+by cell, e.g. for \code{colLabels(sce) <- leiden(sce)}.
 }
 \description{
 Leiden (Traag, Waltman & van Eck 2019) maximising modularity at resolution
@@ -55,6 +78,13 @@ f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
 g <- Matrix::readMM(f)
 labels <- leiden(g, resolution = 1, seed = 0)
 table(labels)
+
+sce <- SingleCellExperiment::SingleCellExperiment(
+    assays = list(counts = matrix(0, 2, 200)),
+    reducedDims = list(PCA = rbind(matrix(rnorm(400), ncol = 4),
+                                   matrix(rnorm(400, 5), ncol = 4))))
+SingleCellExperiment::colLabels(sce) <- leiden(sce, seed = 1)
+table(SingleCellExperiment::colLabels(sce))
 }
 \seealso{
 \code{\link[=cluster_libreville]{cluster_libreville()}} for igraph and bluster.
