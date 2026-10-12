@@ -5,6 +5,12 @@
 #' @useDynLib clusterLibreville, .registration = TRUE
 NULL
 
+#' An undirected edge list (1-based, as igraph::as_edgelist gives it) as a symmetric CSR (0-based p / i /
+#' x, like a dgCMatrix's slots): each edge in both rows, a self-loop once, repeated edges summed in edge
+#' order, columns sorted within each row.
+#' @keywords internal
+edges_csr_rs <- function(from, to, w, n) .Call(wrap__edges_csr_rs, from, to, w, n)
+
 #' @keywords internal
 leiden_rs <- function(p, i, x, resolution, seed, n_iterations, theta, min_gain, threads, check_symmetry) .Call(wrap__leiden_rs, p, i, x, resolution, seed, n_iterations, theta, min_gain, threads, check_symmetry)
 

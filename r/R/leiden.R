@@ -1,14 +1,25 @@
-## Any supported graph -> a general, double dgCMatrix (for a symmetric matrix,
-## its CSC arrays are a CSR).
+## Any supported graph -> a symmetric CSR as list(p, i, x, n, names) (0-based,
+## like a dgCMatrix's slots: for a symmetric matrix its CSC is a CSR). An
+## igraph graph goes through its edge list (Rust), not the much slower
+## as_adjacency_matrix(): at 100k cells the SNN graph has ~20M edges.
 .as_graph <- function(graph) {
     if (inherits(graph, "igraph")) {
-        w <- if ("weight" %in% igraph::edge_attr_names(graph)) "weight"
-        graph <- igraph::as_adjacency_matrix(graph, attr = w, sparse = TRUE)
+        if (igraph::is_directed(graph)) stop("graph must be undirected")
+        e <- igraph::as_edgelist(graph, names = FALSE)
+        w <- if ("weight" %in% igraph::edge_attr_names(graph)) {
+            as.double(igraph::E(graph)$weight)
+        } else {
+            rep(1, nrow(e))
+        }
+        n <- igraph::vcount(graph)
+        csr <- edges_csr_rs(as.double(e[, 1]), as.double(e[, 2]), w, n)
+        nm <- igraph::V(graph)$name
+        return(c(csr, list(n = n, names = nm)))
     }
     m <- methods::as(graph, "CsparseMatrix")
     m <- methods::as(methods::as(m, "generalMatrix"), "dMatrix")
     if (nrow(m) != ncol(m)) stop("graph must be a square (symmetric) matrix")
-    m
+    list(p = m@p, i = m@i, x = m@x, n = nrow(m), names = rownames(m))
 }
 
 #' Deterministic Leiden community detection
@@ -72,12 +83,12 @@ setMethod("leiden", "ANY", function(x, resolution = 1, seed = 0,
     m <- .as_graph(x)
     stopifnot(seed >= 0, seed < 2^53, seed == floor(seed),
                 is.null(threads) || threads >= 1)
-    r <- leiden_rs(m@p, m@i, m@x, as.double(resolution), as.double(seed),
+    r <- leiden_rs(m$p, m$i, m$x, as.double(resolution), as.double(seed),
                     as.integer(n_iterations), as.double(theta),
                     as.double(min_gain),
                     if (is.null(threads)) 0L else as.integer(threads),
                     isTRUE(check_symmetry))
-    if (!is.null(rownames(m))) names(r) <- rownames(m)
+    if (!is.null(m$names)) names(r) <- m$names
     r
 })
 
@@ -111,9 +122,9 @@ setMethod("leiden", "SingleCellExperiment", function(x, use.dimred = "PCA",
 #' @export
 modularity <- function(graph, membership, resolution = 1) {
     m <- .as_graph(graph)
-    stopifnot(length(membership) == nrow(m))
+    stopifnot(length(membership) == m$n)
     codes <- match(membership, unique(membership)) - 1L
-    modularity_rs(m@p, m@i, m@x, codes, as.double(resolution))
+    modularity_rs(m$p, m$i, m$x, codes, as.double(resolution))
 }
 
 #' Deterministic Leiden as an igraph community function

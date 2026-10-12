@@ -49,3 +49,17 @@ test_that("leiden(<SingleCellExperiment>) clusters its SNN graph", {
     expect_identical(SingleCellExperiment::colLabels(sce), cl)
     expect_error(leiden(sce, use.dimred = "UMAP"))
 })
+
+test_that("igraph input via the edge list equals its adjacency matrix", {
+    set.seed(3)
+    pcs <- matrix(rnorm(3000), ncol = 10)
+    g <- bluster::makeSNNGraph(pcs, k = 10, type = "rank")
+    m <- igraph::as_adjacency_matrix(g, attr = "weight", sparse = TRUE)
+    expect_identical(leiden(g, seed = 2), leiden(m, seed = 2))
+    expect_equal(modularity(g, leiden(g)), modularity(m, leiden(g)))
+    # repeated edges add up; a self-loop counts once; no weight attribute: 1
+    h <- igraph::make_graph(c(1, 2, 1, 2, 2, 3, 3, 3, 3, 4), directed = FALSE)
+    hm <- igraph::as_adjacency_matrix(h, sparse = TRUE)
+    expect_identical(leiden(h), leiden(hm))
+    expect_equal(modularity(h, c(1, 1, 2, 2)), modularity(hm, c(1, 1, 2, 2)))
+})
