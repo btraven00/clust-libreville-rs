@@ -1642,9 +1642,13 @@ impl Gpu {
             }
             if capture {
                 capture = false;
-                c.start_capture().expect("start_capture");
-                round(); // recorded, not run
-                graph = c.stop_capture().ok(); // None: keep launching
+                // Metal: graph_prepare succeeds but capture is unsupported; then keep launching
+                if c.start_capture().is_ok() {
+                    round(); // recorded, not run
+                    graph = c.stop_capture().ok(); // None: keep launching
+                } else {
+                    let _ = c.stop_capture(); // undo graph_prepare
+                }
             }
         }
         if capture {
