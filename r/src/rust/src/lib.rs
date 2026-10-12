@@ -4,11 +4,16 @@
 
 use extendr_api::prelude::*;
 
-fn graph(p: &[i32], i: &[i32], x: &[f64], check_symmetry: bool) -> dl::Graph {
+/// The graph, or why not. No R API here: this also runs on worker threads (dl::with_threads).
+fn try_graph(p: &[i32], i: &[i32], x: &[f64], check_symmetry: bool) -> Result<dl::Graph, String> {
     let indptr: Vec<usize> = p.iter().map(|&v| v as usize).collect();
     let indices: Vec<u32> = i.iter().map(|&v| v as u32).collect();
     let build = if check_symmetry { dl::Graph::from_csr } else { dl::Graph::from_csr_trusted };
-    build(&indptr, &indices, x).unwrap_or_else(|e| throw_r_error(format!("invalid graph: {e}")))
+    build(&indptr, &indices, x).map_err(|e| format!("invalid graph: {e}"))
+}
+
+fn graph(p: &[i32], i: &[i32], x: &[f64], check_symmetry: bool) -> dl::Graph {
+    try_graph(p, i, x, check_symmetry).unwrap_or_else(|e| throw_r_error(e))
 }
 
 /// An undirected edge list (1-based, as igraph::as_edgelist gives it) as a symmetric CSR (0-based p / i /
@@ -62,7 +67,7 @@ fn edges_csr_rs(from: &[f64], to: &[f64], w: &[f64], n: i32) -> List {
 #[allow(clippy::too_many_arguments)]
 fn leiden_rs(p: &[i32], i: &[i32], x: &[f64], resolution: f64, seed: f64, n_iterations: i32, theta: f64, min_gain: f64,
              threads: i32, check_symmetry: bool) -> List {
-    let g = graph(p, i, x, check_symmetry);
+
     let o = dl::Options {
         resolution,
         seed: seed as u64,
@@ -72,7 +77,10 @@ fn leiden_rs(p: &[i32], i: &[i32], x: &[f64], resolution: f64, seed: f64, n_iter
         threads: (threads > 0).then_some(threads as usize), // 0: NULL on the R side
         ..Default::default()
     };
-    let r = dl::leiden_run(&g, &o);
+    let t = (threads > 0).then_some(threads as usize);
+    // the graph build too runs on `threads` (its validation is parallel), not on rayon's global pool
+    let r = dl::with_threads(t, || try_graph(p, i, x, check_symmetry).map(|g| dl::leiden_run(&g, &o)))
+        .unwrap_or_else(|e| throw_r_error(e)); // back on R's thread
     let stop = match r.stop {
         dl::Stop::Converged => "converged",
         dl::Stop::MinGain => "min_gain",

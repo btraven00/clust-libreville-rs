@@ -136,6 +136,13 @@ pub fn leiden_gpu(g: &Graph, o: &Options) -> Vec<u32> {
     .0
 }
 
+/// Run `f` on `threads` worker threads (None: as `Options::threads`): the same cached pool `leiden`
+/// uses. For bindings, so that building the graph (its validation is parallel) also stays within
+/// the caller's thread count instead of rayon's global pool.
+pub fn with_threads<T: Send>(threads: Option<usize>, f: impl FnOnce() -> T + Send) -> T {
+    with_pool(&Options { threads, ..Default::default() }, f)
+}
+
 fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
     let threads = o.threads.unwrap_or_else(|| {
         std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)

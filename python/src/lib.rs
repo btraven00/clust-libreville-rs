@@ -22,9 +22,12 @@ fn leiden_csr<'py>(py: Python<'py>, indptr: PyReadonlyArray1<'py, i64>, indices:
                    data: PyReadonlyArray1<'py, f64>, resolution: f64, seed: u64, n_iterations: i64, theta: f64, min_gain: f64,
                    threads: Option<usize>, check_symmetry: bool)
                    -> PyResult<(Bound<'py, PyArray1<i32>>, usize, &'static str, f64)> {
-    let g = graph(indptr.as_slice()?, indices.as_slice()?, data.as_slice()?, check_symmetry)?;
+    let (ip, ix, d) = (indptr.as_slice()?, indices.as_slice()?, data.as_slice()?);
     let o = clust_libreville_rs::Options { resolution, seed, n_iterations, theta, min_gain, threads, ..Default::default() };
-    let r = py.detach(|| clust_libreville_rs::leiden_run(&g, &o));
+    // the graph build too runs on `threads` (its validation is parallel), not on rayon's global pool
+    let r = py.detach(|| clust_libreville_rs::with_threads(threads, || {
+        graph(ip, ix, d, check_symmetry).map(|g| clust_libreville_rs::leiden_run(&g, &o))
+    }))?;
     let stop = match r.stop {
         clust_libreville_rs::Stop::Converged => "converged",
         clust_libreville_rs::Stop::MinGain => "min_gain",
