@@ -163,27 +163,17 @@ plots <- lapply(c(1, 4), function(i) {
 patchwork::wrap_plots(plots)
 ```
 
-# Inside bluster, and next to igraph
+# Using clusterLibreville in bluster
 
 `cluster_libreville()` has igraph's community-function interface, so it plugs
-into bluster's graph-based clustering:
+into bluster's graph-based clustering, for example through
+`bluster::clusterRows()`; it gives the same labels as `leiden(sce)` above:
 
 ```{r bluster}
 param <- bluster::SNNGraphParam(k = 10, cluster.fun = cluster_libreville,
                                 cluster.args = list(seed = 0))
 by_bluster <- bluster::clusterRows(reducedDim(sce, "PCA"), param)
 identical(as.integer(by_bluster), as.integer(colLabels(sce)))
-```
-
-On the same graph, igraph's own Leiden (single-threaded) for comparison; the
-modularity of both partitions is computed the same way:
-
-```{r igraph}
-g <- bluster::makeSNNGraph(reducedDim(sce, "PCA"), k = 10, type = "rank")
-ig <- igraph::cluster_leiden(g, objective_function = "modularity",
-                             n_iterations = 10)
-c(clusterLibreville = modularity(g, colLabels(sce)),
-  igraph = modularity(g, igraph::membership(ig)))
 ```
 
 # Compared with the usual Bioconductor choices
@@ -195,6 +185,8 @@ igraph's defaults apply: the *CPM* objective at resolution 1 (not modularity)
 and 2 iterations. Each choice on the same graph:
 
 ```{r compare}
+# the SNN graph that leiden(sce) builds, clustered by each method
+g <- bluster::makeSNNGraph(reducedDim(sce, "PCA"), k = 10, type = "rank")
 choices <- list(
     "walktrap (OSCA default)" = function(g) igraph::cluster_walktrap(g),
     "igraph leiden, defaults (CPM)" = function(g) igraph::cluster_leiden(g),
