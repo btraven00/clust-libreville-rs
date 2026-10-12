@@ -262,10 +262,9 @@ All runs converge to the same partition (10 clusters, adjusted Rand index
 threads. These times come from an 8-core laptop with other jobs running, so
 the multi-threaded ones are pessimistic; they were measured outside this
 vignette, which would otherwise take minutes to build. The crossover lies
-somewhere between the two dataset sizes. So `clusterLibreville` pays off once
-datasets reach tens of thousands of cells, and for repeated runs (many seeds
-or resolutions) on any dataset; its other advantage, reproducibility at any
-number of threads, holds at every size.
+somewhere between the two dataset sizes. So `clusterLibreville` pays off in
+speed once datasets reach tens of thousands of cells; its other advantage,
+reproducibility at any number of threads, holds at every size.
 
 # Session information
 
