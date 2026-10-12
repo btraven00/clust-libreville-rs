@@ -181,6 +181,163 @@ fn decide(offsets: &[u32], targets: &[u32], weights: &[Fl], strength: &[Fl], com
     }
 }
 
+/// Rows longer than this go to `decide_hubs` from `decide_plane`.
+const PLANE_DEG: usize = 512;
+
+/// `decide`, one plane (SIMD group) per vertex instead of one thread: lane l loads edge
+/// start + l (then + PLANE_DIM, ...), and every lane learns its edge's community total and whether
+/// the edge is that community's first occurrence by broadcasting the plane's edges in edge order,
+/// so the per-community sums run in the same order as `decide`'s and the candidates keep their
+/// first-touched order. The best move is a plane max of the gains, ties to the earliest candidate
+/// (plane min of the edge index), then the strict `>` against staying / a new community, as in
+/// `decide`: the same output, without `decide`'s per-thread candidate arrays (thread-local memory).
+/// Rows longer than PLANE_DEG are listed for `decide_hubs`. A plane of threads per vertex follows
+/// the degree-binned thread assignment of Naim, Manne, Halappanavar & Tumeo, "Community detection on
+/// the GPU" (IPDPS 2017).
+#[cube(launch_unchecked)]
+fn decide_plane(offsets: &[u32], targets: &[u32], weights: &[Fl], strength: &[Fl], comm: &[u32], tot: &[Fl], size: &[u32],
+                scale: Fl, verts: &[u32], cur: &[u32], affected: &mut [u32], out_to: &mut [u32], out_wto: &mut [Fl],
+                out_wfrom: &mut [Fl], hubs: &mut [u32], hub_count: &[Atomic<u32>]) {
+    let count = cur[0] as usize;
+    let lane = UNIT_POS_PLANE;
+    let pd = PLANE_DIM as usize;
+    let none = !u32::new(0);
+    let stride = CUBE_COUNT * CUBE_DIM_Y as usize;
+    let mut i = CUBE_POS * CUBE_DIM_Y as usize + UNIT_POS_Y as usize;
+    while i < count {
+        let v = verts[i] as usize;
+        let mut a = 0u32;
+        if lane == 0 {
+            a = affected[v];
+        }
+        a = plane_broadcast(a, 0u32);
+        if a == 0 {
+            if lane == 0 {
+                out_to[i] = STAY;
+            }
+        } else {
+            if lane == 0 {
+                affected[v] = 0;
+            }
+            let (start, end) = (offsets[v] as usize, offsets[v + 1] as usize);
+            if end - start > PLANE_DEG {
+                if lane == 0 {
+                    out_to[i] = HUB;
+                    hubs[hub_count[0].fetch_add(1u32) as usize] = i as u32;
+                }
+            } else {
+                let own = comm[v];
+                let k = strength[v];
+                let chunks = (end - start + pd - 1) / pd;
+                let mut w_from = Fl::new(0.0f32);
+                let mut best_g = Fl::new(0.0f32);
+                let mut best_w = Fl::new(0.0f32);
+                let mut best_c = own;
+                let mut has_best = 0u32;
+                for t in 0..chunks {
+                    // this lane's edge of chunk t
+                    let ei = t * pd + lane as usize;
+                    let mut c = 0u32;
+                    let mut ok = 0u32;
+                    if start + ei < end {
+                        let u = targets[start + ei];
+                        if u != v as u32 {
+                            c = comm[u as usize];
+                            ok = 1u32;
+                        }
+                    }
+                    // its community's total over the row, summed in edge order; first occurrence?
+                    let mut acc = Fl::new(0.0f32);
+                    let mut first = ok;
+                    for t2 in 0..chunks {
+                        let e2 = t2 * pd + lane as usize;
+                        let mut c2 = 0u32;
+                        let mut w2 = Fl::new(0.0f32);
+                        let mut ok2 = 0u32;
+                        if start + e2 < end {
+                            let u2 = targets[start + e2];
+                            if u2 != v as u32 {
+                                c2 = comm[u2 as usize];
+                                w2 = Fl::cast_from(weights[start + e2]);
+                                ok2 = 1u32;
+                            }
+                        }
+                        for j in 0..pd {
+                            let cj = plane_shuffle(c2, j as u32);
+                            let wj = plane_shuffle(w2, j as u32);
+                            let okj = plane_shuffle(ok2, j as u32);
+                            if okj == 1 && cj == c {
+                                acc += wj;
+                                if t2 * pd + j < ei {
+                                    first = 0u32;
+                                }
+                            }
+                        }
+                    }
+                    // the one first occurrence of `own` carries w_from; adding zeros is exact
+                    let mut wf = Fl::new(0.0f32);
+                    if first == 1 && c == own {
+                        wf = acc;
+                    }
+                    w_from += plane_sum(wf);
+                    // this chunk's best candidate: highest gain, then earliest edge
+                    let mut g = Fl::min_value();
+                    let mut cand = 0u32;
+                    if first == 1 && c != own {
+                        g = acc - scale * k * tot[c as usize];
+                        cand = 1u32;
+                    }
+                    let gm = plane_max(g);
+                    let mut idx = none;
+                    if cand == 1 && g == gm {
+                        idx = ei as u32;
+                    }
+                    let im = plane_min(idx);
+                    if im != none {
+                        let mut ws = Fl::new(0.0f32);
+                        let mut cs = 0u32;
+                        if idx == im {
+                            ws = acc;
+                            cs = c;
+                        }
+                        let wm = plane_sum(ws);
+                        let cm = plane_max(cs);
+                        // earlier chunks hold earlier candidates: they keep ties
+                        if has_best == 0 || gm > best_g {
+                            has_best = 1u32;
+                            best_g = gm;
+                            best_w = wm;
+                            best_c = cm;
+                        }
+                    }
+                }
+                let mut out_c = own;
+                let mut out_g = w_from - scale * k * (tot[own as usize] - k);
+                let mut out_w = w_from;
+                if size[own as usize] > 1 && Fl::new(0.0f32) > out_g {
+                    out_c = u32::MAX;
+                    out_g = Fl::new(0.0f32);
+                    out_w = Fl::new(0.0f32);
+                }
+                if has_best == 1 && best_g > out_g {
+                    out_c = best_c;
+                    out_w = best_w;
+                }
+                if lane == 0 {
+                    if out_c == own {
+                        out_to[i] = STAY;
+                    } else {
+                        out_to[i] = out_c;
+                    }
+                    out_wto[i] = out_w;
+                    out_wfrom[i] = w_from;
+                }
+            }
+        }
+        i += stride;
+    }
+}
+
 /// The decide step for hub vertices (more than MAXC distinct neighbour communities), one cube
 /// per hub, grid-striding over the hubs decide listed. The (community, edge) keys of the row are
 /// bitonic-sorted in shared memory, so each community's edges are contiguous and in CSR order;
@@ -1595,19 +1752,34 @@ impl Gpu {
         // sequence every time, so after a warm-up round it is captured once as a device graph
         // (CUDA graph; re-encoded on wgpu) and replayed: one dispatch instead of 9 launches per
         // group. Backends without graphs run it as plain launches.
+        // decide: one plane per vertex where the device has plane ops of one fixed width
+        // (DETLEIDEN_DECIDE=thread: the thread-per-vertex kernel, for A/B checks)
+        const PLANES: u32 = 4; // vertices per cube
+        let hw = &c.properties().hardware;
+        let plane_cfg = |len: usize| (CubeCount::Static((len.min(GRID_CAP) as u32).div_ceil(PLANES), 1, 1),
+                                      CubeDim::new_2d(hw.plane_size_max, PLANES));
+        let use_plane = c.properties().features.plane.contains(cubecl::features::Plane::Ops)
+            && hw.plane_size_min == hw.plane_size_max
+            && std::env::var("DETLEIDEN_DECIDE").map_or(true, |v| v != "thread");
         let round = || {
             unsafe { zero1::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_moves, 1)) };
             for (gi, &glen) in lens.iter().enumerate() {
                 let len = glen as usize;
                 // grid-stride kernels over the group's affected list: a capped grid
                 let (cc, cd) = Self::grid(len.min(GRID_CAP));
+                let plane = use_plane.then(|| plane_cfg(len));
                 let goff = goffs[gi];
                 let verts = h_alist.clone().offset_start(goff as u64 * 4);
                 unsafe {
                     begin::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_acount, ng), gi as u32, arg(&h_cur, 1));
-                    decide::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
+                    match plane {
+                        Some((pc, pd)) => decide_plane::launch_unchecked(c, pc.clone(), pd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
                         arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_cur, 1),
-                        arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1));
+                        arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1)),
+                        None => decide::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
+                        arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_cur, 1),
+                        arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1)),
+                    };
                     decide_hubs::launch_unchecked(c, CubeCount::Static(HUB_CUBES, 1, 1), CubeDim::new_1d(BLOCK), arg(&d.off, n + 1),
                         arg(&d.targets, d.m), arg(&d.weights, d.m), arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids),
                         arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_hubs, len), arg(&h_hub_count, 1), arg(&o_to, len),
