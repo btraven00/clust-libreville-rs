@@ -3,7 +3,7 @@
 //! Same graph, same options, same seed: the same labels. Every random choice is a pure function
 //! of (seed, step, vertex) and every floating-point sum runs in a fixed order, so the result
 //! does not depend on the order in which work is done (phase 2 relies on it for thread-count
-//! invariance). Phase 1: sequential. See PLAN.md.
+//! invariance). See docs/design.md.
 
 mod aggregate;
 mod backend;
@@ -32,7 +32,7 @@ pub enum Apply {
     /// Rule C: each accepted against the totals frozen at the group's start, made pessimistic by
     /// all earlier proposals (prefix sums per community). Order-free, so a GPU reproduces it in
     /// parallel bit for bit: the GPU backend uses it, and on the CPU it gives the GPU's labels.
-    /// Non-inferior to `Sequential` (PLAN.md); ~5% slower on the CPU.
+    /// Non-inferior to `Sequential` (docs/design.md, Validation); ~5% slower on the CPU.
     OrderFree,
 }
 

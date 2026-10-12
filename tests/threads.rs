@@ -53,7 +53,7 @@ fn load(name: &str) -> Option<Graph> {
 /// The hao2021 graphs (bench/graphs, git-ignored): every thread count, and the locked labels
 /// exactly. Sequential: phase 1 (4783e5d) and every output-preserving change since. OrderFree:
 /// rule C moving + fixed-point sorted-column aggregation + synchronous refinement (the GPU
-/// reference; NI vs Sequential and both converged references, PLAN.md).
+/// reference; NI vs Sequential and both converged references, docs/design.md).
 /// `cargo test --release -- --ignored`
 #[test]
 #[ignore]

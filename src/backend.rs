@@ -1,5 +1,5 @@
 //! Kernels behind a backend; the plan (level loop, fixed point, canonical labels: lib.rs) is
-//! shared by every backend. See docs/road-to-cubecl.md (untracked) and PLAN.md phase 2.
+//! shared by every backend. See docs/design.md.
 //!
 //! Contract: every kernel's output is a pure function of its inputs (graph, labels, options,
 //! seed, step), never of thread count or scheduling. The thread-invariance and level-hash tests
