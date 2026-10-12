@@ -27,6 +27,7 @@ Imports:
     SingleCellExperiment,
     stats
 Suggests:
+    aricode,
     BiocStyle,
     ggplot2,
     knitr,

@@ -98,3 +98,50 @@ test_that("details = TRUE reports how the run ended", {
     expect_false(one$converged)
     expect_identical(one$stop, "n_iterations")
 })
+
+test_that("champ: the envelope is the pool's best, from its grid points", {
+    m <- planted()
+    res <- 10^seq(-1, 1, length.out = 8)
+    ch <- champ(m, res, seeds = 0:1)
+    d <- ch$domains
+    expect_gte(nrow(d), 2)
+    expect_equal(c(d$gamma_lo[1], d$gamma_hi[nrow(d)]), range(res))
+    expect_identical(d$gamma_hi[-nrow(d)], d$gamma_lo[-1])
+    for (j in seq_len(nrow(d))) { # provenance
+        expect_identical(ch$labels[, j],
+                         leiden(m, resolution = d$resolution[j], seed = d$seed[j]))
+    }
+    pool <- lapply(res, function(r) lapply(0:1, function(s) leiden(m, resolution = r, seed = s)))
+    pool <- unlist(pool, recursive = FALSE)
+    for (x in 10^seq(-1, 1, length.out = 30)) {
+        best <- max(vapply(pool, function(p) modularity(m, p, x), 0))
+        j <- which(d$gamma_lo <= x & x <= d$gamma_hi)[1]
+        expect_gte(modularity(m, ch$labels[, j], x), best - 1e-12)
+    }
+    expect_identical(champ(m, res, 0:1, threads = 1), champ(m, res, 0:1, threads = 4))
+    expect_error(champ(m, c(0, 1)))
+    expect_error(champ(m, 1, seeds = -1))
+})
+
+test_that("champ: agreement with neighbours and seeds, NVI or AMI", {
+    skip_if_not_installed("aricode")
+    m <- planted()
+    res <- 10^seq(-1, 1, length.out = 8)
+    for (metric in c("nvi", "ami")) {
+        ch <- champ(m, res, seeds = 0:2, metric = metric)
+        d <- ch$domains
+        ref <- if (metric == "nvi") aricode::NVI else aricode::AMI
+        expect_true(is.na(d$to_prev[1]))
+        for (j in seq_len(nrow(d))[-1]) {
+            expect_equal(d$to_prev[j], ref(ch$labels[, j - 1], ch$labels[, j]),
+                         tolerance = 1e-9)
+        }
+        j <- ch$best
+        mates <- lapply(setdiff(0:2, d$seed[j]), function(s)
+            leiden(m, resolution = d$resolution[j], seed = s))
+        expect_equal(d$to_seeds[j],
+                     mean(vapply(mates, function(l) ref(ch$labels[, j], l), 0)),
+                     tolerance = 1e-9)
+    }
+    expect_error(champ(m, res, metric = "ari"))
+})

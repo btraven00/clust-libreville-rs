@@ -8,12 +8,14 @@ polars / pyarrow / numpy columns). Labels are ``0..k-1``, community 0 the larges
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from . import tl
-from ._core import __version__, leiden_csr, modularity_csr
+from ._core import __version__, champ_csr, leiden_csr, modularity_csr
 
-__all__ = ["leiden", "leiden_edges", "modularity", "tl", "__version__"]
+__all__ = ["Champ", "champ", "leiden", "leiden_edges", "modularity", "tl", "__version__"]
 
 
 def _csr(graph):
@@ -117,3 +119,72 @@ def modularity(graph, labels, *, resolution: float = 1.0) -> float:
     """Newman modularity of ``labels`` (any values, one per vertex) at ``resolution``."""
     _, codes = np.unique(np.asarray(labels), return_inverse=True)
     return modularity_csr(*_csr(graph), codes.astype(np.int64).ravel(), float(resolution))
+
+
+@dataclass
+class Champ:
+    """Partitions on the CHAMP envelope, in increasing resolution: ``labels[i]`` has the highest modularity
+    in the pool for every resolution in ``[gamma_lo[i], gamma_hi[i]]``. ``resolution[i]`` and ``seed[i]``:
+    the grid point that produced it. ``best``: the index with the widest domain in log resolution.
+    ``to_prev``, ``to_neighbours``, ``to_seeds``: agreement under ``metric`` with the previous domain's
+    partition, the mean with both neighbours' (small NVI / large AMI: a plateau; a jump: a boundary), and the
+    mean with the other seeds' partitions at the same grid resolution (algorithmic noise); NaN where there is
+    nothing to compare with. ``metric`` "nvi" is a distance (0 = identical), "ami" a similarity (1 = identical).
+    """
+
+    labels: np.ndarray  # (n_domains, n_vertices) int32
+    gamma_lo: np.ndarray
+    gamma_hi: np.ndarray
+    resolution: np.ndarray
+    seed: np.ndarray
+    n_communities: np.ndarray
+    metric: str
+    to_prev: np.ndarray
+    to_neighbours: np.ndarray
+    to_seeds: np.ndarray
+
+    @property
+    def log_width(self) -> np.ndarray:
+        return np.log(self.gamma_hi / self.gamma_lo)
+
+    @property
+    def best(self) -> int:
+        return int(np.argmax(self.log_width))
+
+
+def champ(graph, resolutions, seeds=0, *, gamma_range: tuple[float, float] | None = None, n_iterations: int = -1,
+          theta: float = 0.01, min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True,
+          metric: str = "nvi") -> Champ:
+    """Pick resolutions by CHAMP (Weir et al. 2017): run :func:`leiden` at every pair of ``resolutions`` x
+    ``seeds`` (numpy arrays, e.g. ``np.logspace(-1, 1, 20)`` and ``np.arange(10)``), then keep the partitions
+    that have the highest modularity among the pool somewhere in ``gamma_range`` (default: the span of
+    ``resolutions``), each with its interval. Modularity is linear in the resolution, so the intervals are
+    exact; they are optimal relative to the pool, not globally. Each partition is also scored by its agreement
+    with its neighbouring domains and with the other seeds (``metric``: "nvi", normalised variation of
+    information, the default, a metric so steps along the domains add up, as in Markov stability; or "ami",
+    adjusted mutual information, corrected for chance agreement between fine partitions). Deterministic, at
+    any number of ``threads``. Other arguments as :func:`leiden`."""
+    if threads is not None and threads < 1:
+        raise ValueError("threads must be >= 1 or None")
+    res = np.atleast_1d(np.asarray(resolutions, dtype=np.float64)).ravel()
+    seeds = np.atleast_1d(np.asarray(seeds)).ravel()
+    if metric not in ("nvi", "ami"):
+        raise ValueError("metric must be 'nvi' or 'ami'")
+    if not len(res) or not len(seeds):
+        raise ValueError("resolutions and seeds must not be empty")
+    if not np.all(np.isfinite(res)) or res.min() <= 0:
+        raise ValueError("resolutions must be finite and > 0")
+    if seeds.dtype.kind not in "iu" or seeds.min() < 0:
+        raise ValueError("seeds must be integers >= 0")
+    lo, hi = (res.min(), res.max()) if gamma_range is None else map(float, gamma_range)
+    if not 0 < lo <= hi < np.inf:
+        raise ValueError("gamma_range must satisfy 0 < low <= high < inf")
+    csr = _csr(graph)
+    index, gamma_lo, gamma_hi, labels, to_prev, to_neighbours, to_seeds = champ_csr(
+        *csr, res, seeds.astype(np.uint64), lo, hi, int(n_iterations), float(theta), float(min_gain), threads,
+        bool(check_symmetry), metric)
+    labels = labels.reshape(len(index), len(csr[0]) - 1)
+    i_res, i_seed = np.unravel_index(index, (len(res), len(seeds)))
+    return Champ(labels=labels, gamma_lo=gamma_lo, gamma_hi=gamma_hi, resolution=res[i_res], seed=seeds[i_seed],
+                 n_communities=labels.max(axis=1, initial=-1).astype(np.int64) + 1, metric=metric, to_prev=to_prev,
+                 to_neighbours=to_neighbours, to_seeds=to_seeds)

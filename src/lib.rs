@@ -7,6 +7,8 @@
 
 mod aggregate;
 mod backend;
+mod champ;
+mod compare;
 #[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
 pub mod gpu;
 mod graph;
@@ -14,6 +16,8 @@ mod moving;
 mod refine;
 mod rng;
 
+pub use champ::{champ, champ_grid, Agreement, Domain};
+pub use compare::{ami, nvi, Metric};
 pub use graph::Graph;
 use backend::{Backend, Cpu};
 use graph::{Csr, Repr, Weight};
@@ -290,6 +294,29 @@ fn modularity_csr<W: Weight>(g: &Csr<W>, labels: &[u32], resolution: f64) -> f64
     if g.total <= 0.0 {
         return 0.0;
     }
+    let (inside, tot) = community_sums(g, labels);
+    (0..inside.len()).map(|c| inside[c] - resolution * tot[c] * tot[c] / g.total).sum::<f64>() / g.total
+}
+
+/// Modularity of `labels` as a line in γ: `(a, b)` with Q(γ) = a − γ·b, where a is the fraction of the
+/// edge weight inside communities and b = Σ_c (K_c / 2m)². Equals `modularity` up to rounding.
+pub fn modularity_line(g: &Graph, labels: &[u32]) -> (f64, f64) {
+    fn line<W: Weight>(g: &Csr<W>, labels: &[u32]) -> (f64, f64) {
+        if g.total <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let (inside, tot) = community_sums(g, labels);
+        (inside.iter().sum::<f64>() / g.total, tot.iter().map(|t| t * t).sum::<f64>() / (g.total * g.total))
+    }
+    match &g.0 {
+        Repr::F32(c) => line(c, labels),
+        Repr::F64(c) => line(c, labels),
+    }
+}
+
+/// Per community, numbered by first appearance (so the same partition always sums in the same
+/// order): the edge weight inside it (both directions) and its total strength.
+fn community_sums<W: Weight>(g: &Csr<W>, labels: &[u32]) -> (Vec<f64>, Vec<f64>) {
     let (d, k) = refine::dense(labels);
     let (mut inside, mut tot) = (vec![0.0f64; k], vec![0.0f64; k]);
     for v in 0..g.n() {
@@ -302,5 +329,5 @@ fn modularity_csr<W: Weight>(g: &Csr<W>, labels: &[u32], resolution: f64) -> f64
             }
         }
     }
-    (0..k).map(|c| inside[c] - resolution * tot[c] * tot[c] / g.total).sum::<f64>() / g.total
+    (inside, tot)
 }

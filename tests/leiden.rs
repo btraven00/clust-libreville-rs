@@ -178,3 +178,55 @@ fn run_reports_how_it_ended() {
     let gain = leiden_run(&g, &Options { seed: 1, min_gain: 0.5, ..Default::default() });
     assert!(gain.iterations <= 2 && gain.stop != Stop::IterationCap, "{:?} {}", gain.stop, gain.iterations);
 }
+
+#[test]
+fn champ_matches_brute_force_over_the_pool() {
+    use clust_libreville_rs::{champ, modularity_line};
+    let (n, edges) = common::planted(3, 6, 25, 0.3, 0.02);
+    let g = common::graph(n, &edges);
+    let grid: Vec<f64> = (0..12).map(|i| 10f64.powf(-1.0 + i as f64 / 6.0)).collect(); // 0.1 .. ~68
+    let pool: Vec<Vec<u32>> = grid.iter()
+        .flat_map(|&r| (0..3).map(move |s| Options { resolution: r, seed: s, ..Default::default() }))
+        .map(|o| leiden(&g, &o))
+        .collect();
+    let d = champ(&g, &pool, grid[0], grid[11]);
+    assert!(d.len() >= 2 && d.len() < pool.len(), "{}", d.len());
+    assert_eq!((d[0].lo, d[d.len() - 1].hi), (grid[0], grid[11]));
+    assert!(d.windows(2).all(|w| w[0].hi == w[1].lo && w[0].lo < w[0].hi));
+    for (i, (a, b)) in pool.iter().map(|l| modularity_line(&g, l)).enumerate() {
+        assert!((a - b - modularity(&g, &pool[i], 1.0)).abs() < 1e-12);
+    }
+    // at every γ, the domain's partition is the pool's best
+    for k in 0..=400 {
+        let x = grid[0] * (grid[11] / grid[0]).powf(k as f64 / 400.0);
+        let best = pool.iter().map(|l| modularity(&g, l, x)).fold(f64::MIN, f64::max);
+        let at = d.iter().find(|d| d.lo <= x && x <= d.hi).unwrap();
+        assert!(modularity(&g, &pool[at.index], x) >= best - 1e-12, "γ {x}");
+    }
+}
+
+#[test]
+fn champ_grid_scores_agree_with_direct_comparisons() {
+    use clust_libreville_rs::{champ_grid, nvi, Metric};
+    let (n, edges) = common::planted(3, 6, 25, 0.3, 0.02);
+    let g = common::graph(n, &edges);
+    let grid: Vec<f64> = (0..12).map(|i| 10f64.powf(-1.0 + i as f64 / 6.0)).collect();
+    let o = Options::default();
+    let d = champ_grid(&g, &grid, &[0, 1, 2], &o, grid[0], grid[11], Metric::Nvi);
+    assert!(d.len() >= 2);
+    assert!(d[0].2.prev.is_nan());
+    for w in d.windows(2) {
+        assert_eq!(w[1].2.prev, nvi(&w[0].1, &w[1].1));
+    }
+    let (first, last) = (&d[0].2, &d[d.len() - 1].2);
+    assert_eq!((first.neighbours, last.neighbours), (d[1].2.prev, last.prev));
+    assert!(d.iter().all(|(_, _, a)| (0.0..=1.0).contains(&a.seeds) && (0.0..=1.0).contains(&a.neighbours)));
+    // same scores at any thread count; AMI is the other scale (1 = identical)
+    let one = champ_grid(&g, &grid, &[0, 1, 2], &Options { threads: Some(1), ..o.clone() }, grid[0], grid[11], Metric::Nvi);
+    let bits = |d: &[(clust_libreville_rs::Domain, Vec<u32>, clust_libreville_rs::Agreement)]| -> Vec<_> {
+        d.iter().map(|(d, l, a)| (d.index, d.lo.to_bits(), l.clone(), [a.prev, a.neighbours, a.seeds].map(f64::to_bits))).collect()
+    }; // NaN != NaN
+    assert_eq!(bits(&one), bits(&d));
+    let ami = champ_grid(&g, &grid, &[0], &o, grid[0], grid[11], Metric::Ami);
+    assert!(ami.iter().all(|(_, _, a)| a.seeds.is_nan() && a.neighbours <= 1.0));
+}

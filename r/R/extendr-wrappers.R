@@ -17,4 +17,10 @@ leiden_rs <- function(p, i, x, resolution, seed, n_iterations, theta, min_gain, 
 #' @keywords internal
 modularity_rs <- function(p, i, x, membership, resolution) .Call(wrap__modularity_rs, p, i, x, membership, resolution)
 
+#' Leiden at every (resolution, seed), in grid order (pool index = i_resolution * n_seeds + i_seed, 0-based),
+#' then CHAMP over the pool. Labels: one column of n per domain, 1-based. Agreement under `metric` ("nvi" or
+#' "ami", checked on the R side): with the previous domain, mean with both neighbours, mean with the other seeds.
+#' @keywords internal
+champ_rs <- function(p, i, x, resolutions, seeds, gamma_min, gamma_max, n_iterations, theta, min_gain, threads, check_symmetry, metric) .Call(wrap__champ_rs, p, i, x, resolutions, seeds, gamma_min, gamma_max, n_iterations, theta, min_gain, threads, check_symmetry, metric)
+
 # nolint end

@@ -97,9 +97,33 @@ fn modularity_rs(p: &[i32], i: &[i32], x: &[f64], membership: &[i32], resolution
     dl::modularity(&graph(p, i, x, true), &labels, resolution)
 }
 
+/// Leiden at every (resolution, seed), in grid order (pool index = i_resolution * n_seeds + i_seed, 0-based),
+/// then CHAMP over the pool. Labels: one column of n per domain, 1-based. Agreement under `metric` ("nvi" or
+/// "ami", checked on the R side): with the previous domain, mean with both neighbours, mean with the other seeds.
+/// @keywords internal
+#[extendr]
+#[allow(clippy::too_many_arguments)]
+fn champ_rs(p: &[i32], i: &[i32], x: &[f64], resolutions: &[f64], seeds: &[f64], gamma_min: f64, gamma_max: f64,
+            n_iterations: i32, theta: f64, min_gain: f64, threads: i32, check_symmetry: bool, metric: &str) -> List {
+    let metric = if metric == "ami" { dl::Metric::Ami } else { dl::Metric::Nvi };
+    let t = (threads > 0).then_some(threads as usize); // 0: NULL on the R side
+    let o = dl::Options { n_iterations: n_iterations as i64, theta, min_gain, threads: t, ..Default::default() };
+    let seeds: Vec<u64> = seeds.iter().map(|&s| s as u64).collect();
+    let domains = dl::with_threads(t, || {
+        try_graph(p, i, x, check_symmetry).map(|g| dl::champ_grid(&g, resolutions, &seeds, &o, gamma_min, gamma_max, metric))
+    })
+    .unwrap_or_else(|e| throw_r_error(e)); // back on R's thread
+    let f = |x: fn(&(dl::Domain, Vec<u32>, dl::Agreement)) -> f64| domains.iter().map(x).collect::<Vec<f64>>();
+    let index: Vec<i32> = domains.iter().map(|(d, _, _)| d.index as i32).collect();
+    let labels: Vec<i32> = domains.iter().flat_map(|(_, l, _)| l.iter().map(|&l| l as i32 + 1)).collect();
+    list!(index = index, gamma_lo = f(|d| d.0.lo), gamma_hi = f(|d| d.0.hi), labels = labels,
+          to_prev = f(|d| d.2.prev), to_neighbours = f(|d| d.2.neighbours), to_seeds = f(|d| d.2.seeds))
+}
+
 extendr_module! {
     mod clusterLibreville;
     fn edges_csr_rs;
     fn leiden_rs;
     fn modularity_rs;
+    fn champ_rs;
 }

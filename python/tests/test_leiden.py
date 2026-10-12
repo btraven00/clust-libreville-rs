@@ -171,3 +171,79 @@ def test_return_info():
     assert info["modularity"] == pytest.approx(cl.modularity(g, labels), abs=1e-12)
     _, one = cl.leiden(g, seed=1, n_iterations=1, return_info=True)
     assert one["iterations"] == 1 and one["stop"] == "n_iterations" and not one["converged"]
+
+
+def test_champ_envelope_is_the_pools_best():
+    g, _ = planted()
+    res, seeds = np.logspace(-1, 1, 12), np.arange(3)
+    c = cl.champ(g, res, seeds)
+    assert 2 <= len(c.labels) < res.size * seeds.size
+    assert c.gamma_lo[0] == res[0] and c.gamma_hi[-1] == res[-1]
+    assert np.array_equal(c.gamma_hi[:-1], c.gamma_lo[1:])
+    for i in range(len(c.labels)):  # provenance: the grid point reproduces the partition
+        assert np.array_equal(cl.leiden(g, resolution=c.resolution[i], seed=int(c.seed[i])), c.labels[i])
+    pool = [cl.leiden(g, resolution=r, seed=int(s)) for r in res for s in seeds]
+    for x in np.geomspace(res[0], res[-1], 60):
+        best = max(cl.modularity(g, p, resolution=x) for p in pool)
+        i = np.searchsorted(c.gamma_hi, x)
+        assert cl.modularity(g, c.labels[i], resolution=x) >= best - 1e-12
+    assert np.all(np.diff(c.n_communities) >= 0)  # finer as the resolution grows
+    assert c.labels[c.best].max() + 1 == 8  # the planted partition holds the widest domain
+
+
+def test_champ_threads_and_validation():
+    g, _ = planted()
+    a = cl.champ(g, np.logspace(-1, 1, 6), np.arange(2), threads=1)
+    b = cl.champ(g, np.logspace(-1, 1, 6), np.arange(2), threads=4)
+    assert np.array_equal(a.labels, b.labels) and np.array_equal(a.gamma_lo, b.gamma_lo)
+    for bad in ([], [0.0, 1.0], [np.nan]):
+        with pytest.raises(ValueError):
+            cl.champ(g, bad)
+    with pytest.raises(ValueError):
+        cl.champ(g, [1.0], seeds=[-1])
+
+
+def test_scanpy_style_champ(tmp_path):
+    ad = pytest.importorskip("anndata")
+    g, _ = planted()
+    a = ad.AnnData(np.zeros((g.shape[0], 1), dtype=np.float32))
+    a.obsp["connectivities"] = g
+    a.uns["neighbors"] = {"connectivities_key": "connectivities"}
+    res, seeds = np.logspace(-1, 1, 8), np.arange(2)
+    cl.tl.champ(a, res, seeds)
+    c = cl.champ(g, res, seeds)
+    u = a.uns["champ"]
+    assert a.obs["champ"].dtype == "category"
+    assert np.array_equal(a.obs["champ"].cat.codes.to_numpy(), c.labels[c.best])
+    assert np.array_equal(a.obsm["champ"], c.labels.T) and u["best"] == c.best
+    assert np.array_equal(u["domains"]["gamma_hi"], c.gamma_hi)
+    a.write_h5ad(tmp_path / "a.h5ad")  # uns stays writable
+    b = cl.tl.champ(a, res, seeds, key_added="ch", copy=True)
+    assert "ch" in b.obs and "ch" not in a.obs
+
+
+def _nvi(a, b):  # PyGenStability's evaluate_NVI, in numpy
+    _, ab = np.unique(np.stack([a, b]), axis=1, return_counts=True)
+    h = lambda c: -np.sum(c / c.sum() * np.log(c / c.sum()))  # noqa: E731
+    ha, hb, hab = h(np.unique(a, return_counts=True)[1]), h(np.unique(b, return_counts=True)[1]), h(ab)
+    return 0.0 if hab < 1e-12 else (2 * hab - ha - hb) / hab
+
+
+def test_champ_agreement_scores():
+    g, _ = planted()
+    res, seeds = np.logspace(-1, 1, 12), np.arange(3)
+    c = cl.champ(g, res, seeds)
+    assert c.metric == "nvi" and np.isnan(c.to_prev[0])
+    for i in range(1, len(c.labels)):
+        assert c.to_prev[i] == pytest.approx(_nvi(c.labels[i - 1], c.labels[i]), abs=1e-12)
+    i = c.best
+    mates = [cl.leiden(g, resolution=c.resolution[i], seed=int(s)) for s in seeds if s != c.seed[i]]
+    assert c.to_seeds[i] == pytest.approx(np.mean([_nvi(c.labels[i], m) for m in mates]), abs=1e-12)
+    a = cl.champ(g, res, seeds, metric="ami")
+    assert np.array_equal(a.labels, c.labels) and np.all(a.to_neighbours <= 1 + 1e-12)
+    sk = pytest.importorskip("sklearn.metrics")
+    for i in range(1, len(a.labels)):
+        ref = sk.adjusted_mutual_info_score(a.labels[i - 1], a.labels[i], average_method="max")
+        assert a.to_prev[i] == pytest.approx(ref, abs=1e-9)
+    with pytest.raises(ValueError):
+        cl.champ(g, res, metric="ari")

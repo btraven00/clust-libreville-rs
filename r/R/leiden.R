@@ -164,3 +164,83 @@ cluster_libreville <- function(graph, ...) {
                             algorithm = "clusterLibreville",
                             modularity = modularity(graph, labels))
 }
+
+#' Pick the resolution by CHAMP
+#'
+#' Runs [leiden()] at every pair of `resolutions` x `seeds`, then keeps the
+#' partitions that have the highest modularity among that pool somewhere in
+#' `gamma_range`, each with its interval of resolutions (CHAMP: Weir et al.
+#' 2017, <doi:10.3390/a10030093>). Modularity is linear in the resolution, so
+#' the intervals are exact; they are optimal relative to the pool, not
+#' globally. Each partition is also scored by its agreement with its
+#' neighbouring domains and with the other seeds, under `metric`.
+#' Deterministic, at any number of threads.
+#'
+#' @param graph Undirected weighted graph: a symmetric sparse matrix or an
+#'   igraph graph, as for [leiden()].
+#' @param resolutions Grid of resolutions (gamma), all > 0.
+#' @param seeds Seeds, non-negative whole numbers below 2^53.
+#' @param gamma_range The range the intervals cover; `NULL`: the span of
+#'   `resolutions`.
+#' @param metric `"nvi"` (default), normalised variation of information: a
+#'   distance (0 = identical) and a metric, so steps along the domains add
+#'   up, as in Markov stability. `"ami"`, adjusted mutual information: a
+#'   similarity (1 = identical), corrected for the chance agreement between
+#'   partitions into many small communities.
+#' @param ... Other options of [leiden()]: `n_iterations`, `theta`,
+#'   `min_gain`, `threads`, `check_symmetry`.
+#' @return A list: `domains`, a data frame with one row per partition on the
+#'   envelope in increasing resolution (`gamma_lo`, `gamma_hi`, `log_width`,
+#'   `n_communities`, and the grid point that produced it: `resolution`,
+#'   `seed`; and the agreement under `metric`: `to_prev` with the previous
+#'   row's partition, `to_neighbours` the mean with both neighbours' (close:
+#'   a plateau; far: a boundary), `to_seeds` the mean with the other seeds'
+#'   partitions at the same grid resolution (algorithmic noise); `NA` where
+#'   there is nothing to compare with); `labels`, an integer matrix (vertices x domains, labels `1..k`,
+#'   community 1 the largest); and `best`, the row of `domains` with the
+#'   widest interval in log resolution, e.g. `labels[, best]`.
+#' @examples
+#' f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
+#' g <- Matrix::readMM(f)
+#' ch <- champ(g, 10^seq(-1, 1, length.out = 10), seeds = 0:2)
+#' ch$domains
+#' table(ch$labels[, ch$best])
+#' @export
+champ <- function(graph, resolutions = 10^seq(-1, 1, length.out = 20),
+                  seeds = 0:4, gamma_range = NULL, n_iterations = -1L,
+                  theta = 0.01, min_gain = 0, threads = NULL,
+                  check_symmetry = TRUE, metric = c("nvi", "ami")) {
+    metric <- match.arg(metric)
+    m <- .as_graph(graph)
+    resolutions <- as.double(resolutions)
+    seeds <- as.double(seeds)
+    stopifnot(length(resolutions) > 0, all(is.finite(resolutions)),
+                all(resolutions > 0), length(seeds) > 0, all(seeds >= 0),
+                all(seeds < 2^53), all(seeds == floor(seeds)),
+                is.null(threads) || threads >= 1)
+    if (is.null(gamma_range)) gamma_range <- range(resolutions)
+    stopifnot(length(gamma_range) == 2, gamma_range[1] > 0,
+                gamma_range[1] <= gamma_range[2], is.finite(gamma_range[2]))
+    run <- champ_rs(m$p, m$i, m$x, resolutions, seeds,
+                    as.double(gamma_range[1]), as.double(gamma_range[2]),
+                    as.integer(n_iterations), as.double(theta),
+                    as.double(min_gain),
+                    if (is.null(threads)) 0L else as.integer(threads),
+                    isTRUE(check_symmetry), metric)
+    labels <- matrix(run$labels, nrow = m$n)
+    rownames(labels) <- m$names
+    i_res <- run$index %/% length(seeds) + 1L
+    i_seed <- run$index %% length(seeds) + 1L
+    domains <- data.frame(gamma_lo = run$gamma_lo, gamma_hi = run$gamma_hi,
+                            log_width = log(run$gamma_hi / run$gamma_lo),
+                            n_communities = apply(labels, 2, max),
+                            resolution = resolutions[i_res],
+                            seed = seeds[i_seed],
+                            to_prev = nan_na(run$to_prev),
+                            to_neighbours = nan_na(run$to_neighbours),
+                            to_seeds = nan_na(run$to_seeds))
+    list(domains = domains, labels = labels,
+         best = which.max(domains$log_width))
+}
+
+nan_na <- function(x) replace(x, is.nan(x), NA_real_)

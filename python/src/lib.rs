@@ -4,6 +4,7 @@
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 
 fn graph(indptr: &[i64], indices: &[i32], data: &[f64], check_symmetry: bool) -> PyResult<clust_libreville_rs::Graph> {
     if indptr.iter().any(|&x| x < 0) || indices.iter().any(|&x| x < 0) {
@@ -45,10 +46,42 @@ fn modularity_csr<'py>(indptr: PyReadonlyArray1<'py, i64>, indices: PyReadonlyAr
     Ok(clust_libreville_rs::modularity(&g, &l, resolution))
 }
 
+/// Leiden at every (resolution, seed) of the grid, in `meshgrid(indexing="ij")` order (pool index =
+/// i_resolution * n_seeds + i_seed), then CHAMP over the pool. Returns the domains' pool indices, bounds and
+/// labels (flat, one row of n per domain), and their agreement under `metric` ("nvi" or "ami"): with the
+/// previous domain, mean with both neighbours, mean with the other seeds at their grid resolution.
+#[pyfunction]
+#[pyo3(signature = (indptr, indices, data, resolutions, seeds, gamma_min, gamma_max, n_iterations, theta, min_gain, threads, check_symmetry, metric))]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn champ_csr<'py>(py: Python<'py>, indptr: PyReadonlyArray1<'py, i64>, indices: PyReadonlyArray1<'py, i32>,
+                  data: PyReadonlyArray1<'py, f64>, resolutions: PyReadonlyArray1<'py, f64>, seeds: PyReadonlyArray1<'py, u64>,
+                  gamma_min: f64, gamma_max: f64, n_iterations: i64, theta: f64, min_gain: f64, threads: Option<usize>,
+                  check_symmetry: bool, metric: &str) -> PyResult<Bound<'py, PyTuple>> {
+    let metric = match metric {
+        "nvi" => clust_libreville_rs::Metric::Nvi,
+        "ami" => clust_libreville_rs::Metric::Ami,
+        m => return Err(PyValueError::new_err(format!("metric must be 'nvi' or 'ami', not {m:?}"))),
+    };
+    let (ip, ix, d) = (indptr.as_slice()?, indices.as_slice()?, data.as_slice()?);
+    let (rs, ss) = (resolutions.as_slice()?, seeds.as_slice()?);
+    let o = clust_libreville_rs::Options { n_iterations, theta, min_gain, threads, ..Default::default() };
+    let domains = py.detach(|| clust_libreville_rs::with_threads(threads, || {
+        graph(ip, ix, d, check_symmetry).map(|g| clust_libreville_rs::champ_grid(&g, rs, ss, &o, gamma_min, gamma_max, metric))
+    }))?;
+    let f = |x: fn(&(clust_libreville_rs::Domain, Vec<u32>, clust_libreville_rs::Agreement)) -> f64| {
+        domains.iter().map(x).collect::<Vec<_>>().into_pyarray(py)
+    };
+    let index = domains.iter().map(|(d, _, _)| d.index as i64).collect::<Vec<_>>().into_pyarray(py);
+    let labels = domains.iter().flat_map(|(_, l, _)| l.iter().map(|&l| l as i32)).collect::<Vec<_>>().into_pyarray(py);
+    (index, f(|d| d.0.lo), f(|d| d.0.hi), labels, f(|d| d.2.prev), f(|d| d.2.neighbours), f(|d| d.2.seeds))
+        .into_pyobject(py)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(leiden_csr, m)?)?;
     m.add_function(wrap_pyfunction!(modularity_csr, m)?)?;
+    m.add_function(wrap_pyfunction!(champ_csr, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
