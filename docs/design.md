@@ -11,11 +11,12 @@ code is the reference for how.
 - Thread count: tested bit for bit (labels and per-level graph hashes) at 1, 2, 3, 4, 8 and 16 threads
   (`tests/threads.rs`, the hao2021 lock, a random-graph harness).
 - Machine: no step depends on the platform's libm or on FMA contraction (below). The fixture labels in
-  `tests/fixtures/` were produced on x86_64; CI compares every wheel (Linux and macOS, x86_64 and aarch64)
-  against them (`python/tests/test_fixtures.py`).
+  `tests/fixtures/` were produced on x86_64 and are reproduced on aarch64 (Apple M1, `cargo test`); CI
+  compares every wheel (Linux and macOS, x86_64 and aarch64) against them (`python/tests/test_fixtures.py`).
 - GPU: with `Apply::OrderFree` the CUDA backend gives the CPU's labels bit for bit. Metal/WGSL have no
   f64 and run the kernels in f32 (`gpu-f32`): repeatable on a device, equality with the CPU not guaranteed
-  (it held on hao2021 100k with f32 kernels on CUDA).
+  (on hao2021 100k, one iteration, f32 kernels gave the CPU's labels on CUDA and on Metal (M1); run to
+  convergence on Metal they differed, Q 0.894627 vs 0.894672).
 
 Determinism is not seed independence: different seeds give different partitions, as in every Leiden.
 
