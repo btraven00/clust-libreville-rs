@@ -233,8 +233,14 @@ python-igraph up to 0.11.9 runs a single iteration for -1). Times are for the
 clustering step alone, on the machine that built this vignette; igraph runs on
 one thread and `clusterLibreville` on all cores. At 2 iterations the two take
 about the same time; run to convergence, igraph is the faster on a graph this
-small (`r ncol(sce)` cells). `clusterLibreville`'s advantage is reproducibility
-at any number of threads, and speed on large graphs.
+small (`r ncol(sce)` cells). The balance flips with size: on the 68,579 PBMCs
+of `r BiocStyle::Biocpkg("TENxPBMCData")` (`"pbmc68k"`, same preprocessing,
+same kind of graph), clustering to convergence took 73 s with igraph against
+42 s with `clusterLibreville` on one thread and 16 s on eight, with the same
+partition (an 8-core laptop with other jobs running, so the multi-threaded
+times are pessimistic). The crossover lies between these two sizes. So
+`clusterLibreville`'s advantages are reproducibility at any number of threads,
+and speed once datasets reach tens of thousands of cells.
 
 Leiden through bluster with its default
 arguments optimises CPM instead and splits the data into many small clusters:
