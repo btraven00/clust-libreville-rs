@@ -17,7 +17,7 @@ mod refine;
 mod rng;
 
 pub use champ::{champ, champ_grid, Agreement, Domain};
-pub use compare::{ami, nvi, Metric};
+pub use compare::{ami, ecs, nvi, Metric};
 pub use graph::Graph;
 use backend::{Backend, Cpu};
 use graph::{Csr, Repr, Weight};

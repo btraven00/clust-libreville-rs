@@ -9,7 +9,12 @@
 //! al. 2010, eq. 24a; the "max" form is the one Weir et al. 2017 use with CHAMP). Corrects NVI's blind spot:
 //! partitions into many small communities share information by chance. 1 for identical partitions.
 //!
+//! ECS, per vertex (Gates, Wood, Hetrick & Ahn 2019, "Element-centric clustering comparison unifies overlaps and
+//! hierarchy", Sci. Rep. 9:8574; reference implementation CluSim): which vertices the two partitions move.
+//!
 //! Deterministic: counts come from sorting, every sum runs in sorted order. Natural logarithms.
+
+use std::collections::HashMap;
 
 /// Contingency table of `a` × `b`: the nonzero cells (row, column, count) sorted by (row, column), and the
 /// row and column totals, rows and columns numbered by sorted label.
@@ -106,6 +111,21 @@ fn expected_mi(t: &Table) -> f64 {
     e
 }
 
+/// Element-centric similarity of each vertex between `a` and `b` (same length, any labels), in [0, 1]. For hard
+/// partitions the personalised-PageRank definition collapses to |A_i ∩ B_i| / max(|A_i|, |B_i|), A_i and B_i
+/// being the vertex's communities in `a` and `b`, for any restart probability (checked against the PageRank form
+/// to 1e-15). The mean is the global ECS; the per-vertex values show which vertices move, which NVI/AMI can't.
+pub fn ecs(a: &[u32], b: &[u32]) -> Vec<f64> {
+    assert_eq!(a.len(), b.len(), "partitions of different sizes");
+    let (mut sa, mut sb, mut sab) = (HashMap::new(), HashMap::new(), HashMap::new());
+    for (&x, &y) in a.iter().zip(b) {
+        *sa.entry(x).or_insert(0u64) += 1;
+        *sb.entry(y).or_insert(0u64) += 1;
+        *sab.entry((x, y)).or_insert(0u64) += 1;
+    }
+    a.iter().zip(b).map(|(&x, &y)| sab[&(x, y)] as f64 / sa[&x].max(sb[&y]) as f64).collect()
+}
+
 /// Which agreement measure CHAMP's neighbour and seed scores use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Metric {
@@ -136,6 +156,16 @@ mod tests {
         assert!((ami(&a, &relabelled) - 1.0).abs() < 1e-12);
         assert_eq!(nvi(&[0; 4], &[5; 4]), 0.0);
         assert_eq!(ami(&[0; 4], &[5; 4]), 1.0);
+        assert!(ecs(&a, &relabelled).iter().all(|&s| s == 1.0));
+    }
+
+    #[test]
+    fn ecs_is_overlap_over_larger_community() {
+        // a: {0,1,2,3} {4,5}; b: {0,1} {2,3,4,5}
+        let (a, b) = ([0, 0, 0, 0, 1, 1], [0, 0, 1, 1, 1, 1]);
+        assert_eq!(ecs(&a, &b), [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+        let b = [0, 0, 0, 1, 1, 1];
+        assert_eq!(ecs(&a, &b), [0.75, 0.75, 0.75, 0.25, 2.0 / 3.0, 2.0 / 3.0]);
     }
 
     #[test]

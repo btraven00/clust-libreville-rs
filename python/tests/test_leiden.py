@@ -231,6 +231,27 @@ def _nvi(a, b):  # PyGenStability's evaluate_NVI, in numpy
     return 0.0 if hab < 1e-12 else (2 * hab - ha - hb) / hab
 
 
+def _ecs_ppr(a, b, alpha=0.9):  # Gates et al. 2019, from the personalised-PageRank definition
+    def ppr(labels):
+        n = len(labels)
+        P = np.zeros((n, n))
+        for c in np.unique(labels):
+            m = labels == c
+            P[np.ix_(m, m)] = 1.0 / m.sum()
+        return (1 - alpha) * np.linalg.inv(np.eye(n) - alpha * P)
+    return 1 - np.abs(ppr(a) - ppr(b)).sum(1) / (2 * alpha)
+
+
+def test_ecs_matches_pagerank_definition():
+    rng = np.random.default_rng(0)
+    a, b = rng.integers(0, 4, 40), rng.integers(10, 15, 40)
+    s = cl.ecs(a, b)
+    assert s.shape == (40,) and np.allclose(s, _ecs_ppr(a, b), atol=1e-12) and np.allclose(s, _ecs_ppr(a, b, 0.5), atol=1e-12)
+    assert np.all(cl.ecs(a, a) == 1.0) and np.all(cl.ecs(a, b) == cl.ecs(b, a))
+    with pytest.raises(ValueError):
+        cl.ecs(a, b[:-1])
+
+
 def test_champ_agreement_scores():
     g, _ = planted()
     res, seeds = np.logspace(-1, 1, 12), np.arange(3)

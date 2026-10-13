@@ -13,9 +13,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import tl
-from ._core import __version__, champ_csr, leiden_csr, modularity_csr
+from ._core import __version__, champ_csr, ecs_labels, leiden_csr, modularity_csr
 
-__all__ = ["Champ", "champ", "leiden", "leiden_edges", "modularity", "tl", "__version__"]
+__all__ = ["Champ", "champ", "ecs", "leiden", "leiden_edges", "modularity", "tl", "__version__"]
 
 
 def _csr(graph):
@@ -119,6 +119,15 @@ def modularity(graph, labels, *, resolution: float = 1.0) -> float:
     """Newman modularity of ``labels`` (any values, one per vertex) at ``resolution``."""
     _, codes = np.unique(np.asarray(labels), return_inverse=True)
     return modularity_csr(*_csr(graph), codes.astype(np.int64).ravel(), float(resolution))
+
+
+def ecs(a, b) -> np.ndarray:
+    """Element-centric similarity (Gates et al. 2019) of each vertex between partitions ``a`` and ``b`` (any
+    label values, one per vertex), in [0, 1]: the overlap of the vertex's two communities over the larger one.
+    1 where the communities coincide; the mean is the global ECS. Shows *which* cells two seeds or two
+    resolutions move, which NVI/AMI cannot: e.g. ``adata.obs["ecs"] = cl.ecs(labels_seed0, labels_seed1)``."""
+    code = lambda l: np.unique(np.asarray(l).ravel(), return_inverse=True)[1].astype(np.int64)  # noqa: E731
+    return ecs_labels(code(a), code(b))
 
 
 @dataclass

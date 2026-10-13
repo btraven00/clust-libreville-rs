@@ -46,6 +46,17 @@ fn modularity_csr<'py>(indptr: PyReadonlyArray1<'py, i64>, indices: PyReadonlyAr
     Ok(clust_libreville_rs::modularity(&g, &l, resolution))
 }
 
+/// Per-vertex element-centric similarity of two label vectors (codes 0..k-1, same length).
+#[pyfunction]
+fn ecs_labels<'py>(py: Python<'py>, a: PyReadonlyArray1<'py, i64>, b: PyReadonlyArray1<'py, i64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (a, b) = (a.as_slice()?, b.as_slice()?);
+    if a.len() != b.len() {
+        return Err(PyValueError::new_err(format!("partitions of different sizes: {} and {}", a.len(), b.len())));
+    }
+    let (a, b): (Vec<u32>, Vec<u32>) = (a.iter().map(|&x| x as u32).collect(), b.iter().map(|&x| x as u32).collect());
+    Ok(clust_libreville_rs::ecs(&a, &b).into_pyarray(py))
+}
+
 /// Leiden at every (resolution, seed) of the grid, in `meshgrid(indexing="ij")` order (pool index =
 /// i_resolution * n_seeds + i_seed), then CHAMP over the pool. Returns the domains' pool indices, bounds and
 /// labels (flat, one row of n per domain), and their agreement under `metric` ("nvi" or "ami"): with the
@@ -82,6 +93,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(leiden_csr, m)?)?;
     m.add_function(wrap_pyfunction!(modularity_csr, m)?)?;
     m.add_function(wrap_pyfunction!(champ_csr, m)?)?;
+    m.add_function(wrap_pyfunction!(ecs_labels, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
