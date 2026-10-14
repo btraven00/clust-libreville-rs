@@ -120,10 +120,52 @@ fn champ_rs(p: &[i32], i: &[i32], x: &[f64], resolutions: &[f64], seeds: &[f64],
           to_prev = f(|d| d.2.prev), to_neighbours = f(|d| d.2.neighbours), to_seeds = f(|d| d.2.seeds))
 }
 
+/// Statistics of a given partition on the graph (membership 0-based codes): DC-SBM log-likelihood,
+/// description length (Peixoto 2017, uniform priors), Significance (Traag 2013), per-block surprise
+/// under the configuration model, block sizes, degree sums and inner edges.
+/// @keywords internal
+#[extendr]
+fn assess_rs(p: &[i32], i: &[i32], x: &[f64], membership: &[i32], check_symmetry: bool) -> List {
+    let labels: Vec<u32> = membership.iter().map(|&l| l as u32).collect();
+    let g = try_graph(p, i, x, check_symmetry).unwrap_or_else(|e| throw_r_error(e));
+    if labels.len() != g.n() {
+        throw_r_error(format!("{} labels for {} vertices", labels.len(), g.n()));
+    }
+    let s = dl::block_stats(&g, &labels);
+    let inner: Vec<f64> = (0..s.k).map(|r| s.inner_edges(r)).collect();
+    list!(loglik = dl::dcsbm_loglik(&s), description_length = dl::description_length(&g, &labels),
+          significance = dl::significance(&g, &labels), surprise = dl::label_surprise(&g, &labels),
+          size = s.size, degree_sum = s.kappa, inner_edges = inner)
+}
+
+/// neoSBM (Peel, Larremore & Clauset 2017) over `thetas` (ascending), sweeping vertices in `order`
+/// (0-based permutation). Per theta: defecting fraction, log-likelihood gain, sweeps; `blocks` at the last theta.
+/// @keywords internal
+#[extendr]
+#[allow(clippy::too_many_arguments)]
+fn neosbm_rs(p: &[i32], i: &[i32], x: &[f64], membership: &[i32], thetas: &[f64], max_sweeps: i32, order: &[i32],
+             check_symmetry: bool) -> List {
+    let labels: Vec<u32> = membership.iter().map(|&l| l as u32).collect();
+    let order: Vec<u32> = order.iter().map(|&l| l as u32).collect();
+    if thetas.iter().any(|&t| !(t > 0.0 && t < 1.0)) {
+        throw_r_error("thetas must be in (0, 1)".to_string());
+    }
+    let g = try_graph(p, i, x, check_symmetry).unwrap_or_else(|e| throw_r_error(e));
+    if labels.len() != g.n() || order.len() != g.n() {
+        throw_r_error("membership and order must have one entry per vertex".to_string());
+    }
+    let r = dl::neosbm(&g, &labels, thetas, max_sweeps.max(1) as usize, &order);
+    let sweeps: Vec<i32> = r.sweeps.iter().map(|&x| x as i32).collect();
+    let blocks: Vec<i32> = r.labels.iter().map(|&x| x as i32).collect();
+    list!(defect = r.defect, loglik_gain = r.loglik_gain, sweeps = sweeps, blocks = blocks)
+}
+
 extendr_module! {
     mod clusterLibreville;
     fn edges_csr_rs;
     fn leiden_rs;
     fn modularity_rs;
     fn champ_rs;
+    fn assess_rs;
+    fn neosbm_rs;
 }

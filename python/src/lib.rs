@@ -88,12 +88,60 @@ fn champ_csr<'py>(py: Python<'py>, indptr: PyReadonlyArray1<'py, i64>, indices: 
         .into_pyobject(py)
 }
 
+/// Statistics of a given partition on the graph (labels 0..K-1): DC-SBM log-likelihood, description
+/// length (Peixoto 2017, uniform priors), Significance (Traag 2013), per-block surprise under the
+/// configuration model, and the block sizes, degree sums and inner edge counts.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn assess_csr<'py>(py: Python<'py>, indptr: PyReadonlyArray1<'py, i64>, indices: PyReadonlyArray1<'py, i32>,
+                   data: PyReadonlyArray1<'py, f64>, labels: PyReadonlyArray1<'py, i64>, check_symmetry: bool)
+                   -> PyResult<(f64, f64, f64, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let g = graph(indptr.as_slice()?, indices.as_slice()?, data.as_slice()?, check_symmetry)?;
+    let l: Vec<u32> = labels.as_slice()?.iter().map(|&x| x as u32).collect();
+    if l.len() != g.n() {
+        return Err(PyValueError::new_err(format!("{} labels for {} vertices", l.len(), g.n())));
+    }
+    let s = clust_libreville_rs::block_stats(&g, &l);
+    let inner: Vec<f64> = (0..s.k).map(|r| s.inner_edges(r)).collect();
+    Ok((clust_libreville_rs::dcsbm_loglik(&s), clust_libreville_rs::description_length(&g, &l),
+        clust_libreville_rs::significance(&g, &l), clust_libreville_rs::label_surprise(&g, &l).into_pyarray(py),
+        s.size.into_pyarray(py), s.kappa.into_pyarray(py), inner.into_pyarray(py)))
+}
+
+/// neoSBM (Peel, Larremore & Clauset 2017) over `thetas`, sweeping vertices in `order`: per theta the
+/// defecting fraction, the log-likelihood gain and the sweeps run; the blocks at the last theta.
+#[pyfunction]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn neosbm_csr<'py>(py: Python<'py>, indptr: PyReadonlyArray1<'py, i64>, indices: PyReadonlyArray1<'py, i32>,
+                   data: PyReadonlyArray1<'py, f64>, labels: PyReadonlyArray1<'py, i64>, thetas: PyReadonlyArray1<'py, f64>,
+                   max_sweeps: usize, order: PyReadonlyArray1<'py, i64>, check_symmetry: bool)
+                   -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i32>>)> {
+    let (ip, ix, d) = (indptr.as_slice()?, indices.as_slice()?, data.as_slice()?);
+    let l: Vec<u32> = labels.as_slice()?.iter().map(|&x| x as u32).collect();
+    let o: Vec<u32> = order.as_slice()?.iter().map(|&x| x as u32).collect();
+    let th = thetas.as_slice()?.to_vec();
+    if th.iter().any(|&t| !(t > 0.0 && t < 1.0)) {
+        return Err(PyValueError::new_err("thetas must be in (0, 1)"));
+    }
+    let r = py.detach(|| graph(ip, ix, d, check_symmetry).map(|g| {
+        if l.len() != g.n() || o.len() != g.n() {
+            return Err(PyValueError::new_err("labels and order must have one entry per vertex"));
+        }
+        Ok(clust_libreville_rs::neosbm(&g, &l, &th, max_sweeps, &o))
+    }))??;
+    Ok((r.defect.into_pyarray(py), r.loglik_gain.into_pyarray(py),
+        r.sweeps.into_iter().map(|x| x as i64).collect::<Vec<i64>>().into_pyarray(py),
+        r.labels.into_iter().map(|x| x as i32).collect::<Vec<i32>>().into_pyarray(py)))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(leiden_csr, m)?)?;
     m.add_function(wrap_pyfunction!(modularity_csr, m)?)?;
     m.add_function(wrap_pyfunction!(champ_csr, m)?)?;
     m.add_function(wrap_pyfunction!(ecs_labels, m)?)?;
+    m.add_function(wrap_pyfunction!(assess_csr, m)?)?;
+    m.add_function(wrap_pyfunction!(neosbm_csr, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

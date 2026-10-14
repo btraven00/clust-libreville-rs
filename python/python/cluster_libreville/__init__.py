@@ -13,9 +13,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import tl
-from ._core import __version__, champ_csr, ecs_labels, leiden_csr, modularity_csr
+from ._core import __version__, assess_csr, champ_csr, ecs_labels, leiden_csr, modularity_csr, neosbm_csr
 
-__all__ = ["Champ", "champ", "ecs", "leiden", "leiden_edges", "modularity", "tl", "__version__"]
+__all__ = ["Champ", "assess", "champ", "ecs", "leiden", "leiden_edges", "modularity", "neosbm", "tl", "__version__"]
 
 
 def _csr(graph):
@@ -197,3 +197,45 @@ def champ(graph, resolutions, seeds=0, *, gamma_range: tuple[float, float] | Non
     return Champ(labels=labels, gamma_lo=gamma_lo, gamma_hi=gamma_hi, resolution=res[i_res], seed=seeds[i_seed],
                  n_communities=labels.max(axis=1, initial=-1).astype(np.int64) + 1, metric=metric, to_prev=to_prev,
                  to_neighbours=to_neighbours, to_seeds=to_seeds)
+
+
+def _codes(labels):
+    """Integer codes 0..K-1 of any label vector, with the sorted unique labels."""
+    labels = np.asarray(labels)
+    uniq, codes = np.unique(labels, return_inverse=True)
+    return np.ascontiguousarray(codes, dtype=np.int64), uniq
+
+
+def assess(graph, labels, *, check_symmetry: bool = True) -> dict:
+    """Statistics of a *given* partition on the graph, labels taken as fixed (an annotation, a
+    clustering from another modality). Returns a dict:
+
+    ``loglik``: degree-corrected SBM profile log-likelihood (Karrer & Newman 2011), the BESTest statistic
+    (Peel, Larremore & Clauset 2017); ``description_length``: Peixoto (2017) microcanonical DC-SBM
+    description length with uniform priors, nats (graph-tool's ``entropy(degree_dl_kind="uniform")``),
+    which ranks nested annotations: shorter is better supported; ``significance``: Traag et al. (2013),
+    nats; ``surprise``: per label, -ln P(X >= inner edges) under the configuration model, the label's
+    cohesion beyond chance; plus ``labels`` (sorted unique), ``size``, ``degree_sum`` and ``inner_edges``
+    per label. Exact on unweighted graphs; weights count as multiplicities.
+    """
+    codes, uniq = _codes(labels)
+    ll, dl, sig, surprise, size, kappa, inner = assess_csr(*_csr(graph), codes, check_symmetry)
+    return {"loglik": ll, "description_length": dl, "significance": sig, "surprise": surprise, "labels": uniq,
+            "size": size, "degree_sum": kappa, "inner_edges": inner}
+
+
+def neosbm(graph, labels, *, thetas=(1e-6, 1e-5, 1e-4, 1e-3, 3e-3, 1e-2, 3e-2, 0.1, 0.2, 0.3, 0.4, 0.5),
+           max_sweeps: int = 20, seed: int | None = 0, check_symmetry: bool = True) -> dict:
+    """neoSBM (Peel, Larremore & Clauset 2017): every vertex keeps its label's block or defects at a cost of
+    ln((1 - theta) / theta) nats of DC-SBM likelihood. Greedy single-vertex moves, warm-started along
+    ``thetas`` (ascending). Returns ``thetas``, ``defect`` (fraction of vertices off their label at each
+    theta; at theta = 1/2 the prior is neutral), ``loglik_gain``, ``sweeps`` and ``blocks`` (the block of
+    every vertex at the last theta, as codes into ``labels``). ``seed`` fixes the vertex order of the
+    sweeps (a permutation); ``seed=None`` sweeps in vertex order, the deterministic choice for cross-checks.
+    """
+    codes, uniq = _codes(labels)
+    n = len(codes)
+    order = np.arange(n, dtype=np.int64) if seed is None else np.random.default_rng(seed).permutation(n).astype(np.int64)
+    th = np.ascontiguousarray(sorted(thetas), dtype=np.float64)
+    defect, gain, sweeps, blocks = neosbm_csr(*_csr(graph), codes, th, max_sweeps, order, check_symmetry)
+    return {"thetas": th, "defect": defect, "loglik_gain": gain, "sweeps": sweeps, "blocks": blocks, "labels": uniq}

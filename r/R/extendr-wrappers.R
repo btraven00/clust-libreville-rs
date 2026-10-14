@@ -23,4 +23,15 @@ modularity_rs <- function(p, i, x, membership, resolution) .Call(wrap__modularit
 #' @keywords internal
 champ_rs <- function(p, i, x, resolutions, seeds, gamma_min, gamma_max, n_iterations, theta, min_gain, threads, check_symmetry, metric) .Call(wrap__champ_rs, p, i, x, resolutions, seeds, gamma_min, gamma_max, n_iterations, theta, min_gain, threads, check_symmetry, metric)
 
+#' Statistics of a given partition on the graph (membership 0-based codes): DC-SBM log-likelihood,
+#' description length (Peixoto 2017, uniform priors), Significance (Traag 2013), per-block surprise
+#' under the configuration model, block sizes, degree sums and inner edges.
+#' @keywords internal
+assess_rs <- function(p, i, x, membership, check_symmetry) .Call(wrap__assess_rs, p, i, x, membership, check_symmetry)
+
+#' neoSBM (Peel, Larremore & Clauset 2017) over `thetas` (ascending), sweeping vertices in `order`
+#' (0-based permutation). Per theta: defecting fraction, log-likelihood gain, sweeps; `blocks` at the last theta.
+#' @keywords internal
+neosbm_rs <- function(p, i, x, membership, thetas, max_sweeps, order, check_symmetry) .Call(wrap__neosbm_rs, p, i, x, membership, thetas, max_sweeps, order, check_symmetry)
+
 # nolint end

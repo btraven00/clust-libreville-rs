@@ -6,6 +6,7 @@
 //! invariance). See docs/design.md.
 
 mod aggregate;
+mod assess;
 mod backend;
 mod champ;
 mod compare;
@@ -16,6 +17,7 @@ mod moving;
 mod refine;
 mod rng;
 
+pub use assess::{block_stats, dcsbm_loglik, description_length, label_surprise, ln_gamma, neosbm, poisson_log_tail, significance, BlockStats, NeoSbm};
 pub use champ::{champ, champ_grid, Agreement, Domain};
 pub use compare::{ami, ecs, nvi, Metric};
 pub use graph::Graph;
