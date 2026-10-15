@@ -16,9 +16,10 @@ code is the reference for how.
   colouring never runs) were produced on x86_64 and are reproduced on aarch64 (Apple M1, `cargo test`),
   and CI compares every wheel (Linux and macOS, x86_64 and aarch64) against them
   (`python/tests/test_fixtures.py`). The hao2021 locks have been run on x86_64 only.
-- GPU (experimental): with `Apply::OrderFree` the CUDA backend has given the CPU's labels bit for bit in
-  every test so far (`tests/gpu.rs`, one RTX 2000 Ada). Not guaranteed: NVRTC compiles with FMA
-  contraction on, so a near-tie between two gains could be decided differently. Metal/WGSL have no
+- GPU (experimental): with `Apply::OrderFree` the CUDA backend gives the CPU's labels bit for bit
+  (`tests/gpu.rs`, one RTX 2000 Ada). It relies on f64 kernels rounding as the CPU does: cubecl fuses
+  `a * b + c` into FMAs by default, so this repository builds a patched cubecl-llvm without them
+  (`vendor/README.md`; no `fma` left in the PTX, no measurable cost). Metal/WGSL have no
   f64 and run the kernels in f32 (`gpu-f32`): repeatable on a device, equality with the CPU not guaranteed
   (on hao2021 100k, one iteration, f32 kernels gave the CPU's labels on CUDA and on Metal (M1); run to
   convergence on Metal they differed, Q 0.894627 vs 0.894672).

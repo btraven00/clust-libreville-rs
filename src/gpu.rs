@@ -1,8 +1,8 @@
 //! GPU backend (cubecl), feature-gated, experimental: local moving, refinement and aggregation
 //! on the device for large levels (`GPU_MIN_N`, `GPU_COARSE_MIN_N`), the rest on the CPU. It runs
-//! the OrderFree apply rule (`crate::Apply`), so its labels are meant to equal the CPU's with
-//! `Apply::OrderFree`, bit for bit, on devices with f64 (CUDA; Metal/WGSL lack f64). So far they
-//! have; NVRTC contracts to FMA by default, which could decide a near-tie differently.
+//! the OrderFree apply rule (`crate::Apply`), so its labels equal the CPU's with
+//! `Apply::OrderFree`, bit for bit, on devices with f64 (CUDA; Metal/WGSL lack f64). That needs
+//! kernels without FMA contraction: vendor/cubecl-llvm (vendor/README.md).
 //!
 //! Per colour group: decide -> resolve -> link -> accept -> apply -> refresh -> mark, all on the
 //! device; the host reads one move counter per round. No float atomics: totals and prefixes are

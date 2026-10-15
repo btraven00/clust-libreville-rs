@@ -34,3 +34,8 @@ harness = false
 
 [profile.release]
 debug = 1
+
+# cubecl without FMA contraction (vendor/README.md). Applies to this repository's own builds
+# only; crates depending on this one get upstream cubecl.
+[patch.crates-io]
+cubecl-llvm = { path = "vendor/cubecl-llvm" }
