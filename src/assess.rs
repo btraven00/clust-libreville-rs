@@ -244,13 +244,14 @@ struct Mover<'a, W: Weight> {
     kappa: Vec<f64>,
     // scratch
     c: Vec<f64>,
+    loop_w: f64, // v's self-loop weight (in c[r], but it moves with v: it stays inside v's block)
     delta: Vec<f64>,
 }
 
 impl<'a, W: Weight> Mover<'a, W> {
     fn new(g: &'a Csr<W>, meta: &'a [u32]) -> Self {
         let s = block_stats_csr(g, meta);
-        Mover { g, meta, k: s.k, z: meta.to_vec(), m: s.m, kappa: s.kappa, c: vec![0.0; s.k], delta: vec![0.0; s.k] }
+        Mover { g, meta, k: s.k, z: meta.to_vec(), m: s.m, kappa: s.kappa, c: vec![0.0; s.k], loop_w: 0.0, delta: vec![0.0; s.k] }
     }
 
     fn loglik(&self) -> f64 {
@@ -265,12 +266,17 @@ impl<'a, W: Weight> Mover<'a, W> {
         let kv = self.g.strength[v];
         self.c.iter_mut().for_each(|x| *x = 0.0);
         let (t, w) = self.g.row(v);
+        self.loop_w = 0.0;
         for (&u, &x) in t.iter().zip(w) {
             self.c[self.z[u as usize] as usize] += x.into();
+            if u as usize == v {
+                self.loop_w += x.into();
+            }
         }
-        let (m, kap, c) = (&self.m, &self.kappa, &self.c);
+        let (m, kap, c, lw) = (&self.m, &self.kappa, &self.c, self.loop_w);
+        let cr = c[r] - lw; // v's weight to the rest of r
         let mr = |t: usize| m[r * k + t];
-        let a = xlx(mr(r) - 2.0 * c[r]) - xlx(mr(r)); // m_rr
+        let a = xlx(mr(r) - 2.0 * cr - lw) - xlx(mr(r)); // m_rr
         // row/column r against every t ≠ r loses c_t (twice: rt and tr); the t = s term is taken out per s
         let mut d_all = 0.0;
         for (t, &ct) in c.iter().enumerate() {
@@ -285,8 +291,8 @@ impl<'a, W: Weight> Mover<'a, W> {
                 continue;
             }
             let mss = m[s * k + s];
-            let b = xlx(mss + 2.0 * c[s]) - xlx(mss); // m_ss
-            let cc = 2.0 * (xlx(mr(s) - c[s] + c[r]) - xlx(mr(s))); // m_rs = m_sr
+            let b = xlx(mss + 2.0 * c[s] + lw) - xlx(mss); // m_ss
+            let cc = 2.0 * (xlx(mr(s) - c[s] + cr) - xlx(mr(s))); // m_rs = m_sr
             let d = d_all - 2.0 * (xlx(mr(s) - c[s]) - xlx(mr(s)));
             // row/column s against every t ∉ {r, s} gains c_t (twice)
             let mut e = 0.0;
@@ -311,6 +317,12 @@ impl<'a, W: Weight> Mover<'a, W> {
             self.m[s * k + t] += ct;
             self.m[t * k + s] += ct;
         }
+        // the self-loop went from m_rr to m_ss, not to m_rs (requires `deltas(v)` just before)
+        let lw = self.loop_w;
+        self.m[r * k + r] += lw;
+        self.m[s * k + s] += lw;
+        self.m[r * k + s] -= lw;
+        self.m[s * k + r] -= lw;
         self.kappa[r] -= kv;
         self.kappa[s] += kv;
         self.z[v] = s as u32;
@@ -392,7 +404,9 @@ mod tests {
         let mut rows: Vec<Vec<u32>> = vec![vec![]; n];
         for &(a, b) in edges {
             rows[a as usize].push(b);
-            rows[b as usize].push(a);
+            if a != b {
+                rows[b as usize].push(a);
+            }
         }
         let mut indptr = vec![0usize];
         let mut indices = vec![];
@@ -482,6 +496,42 @@ mod tests {
             mv.apply(v, s);
             assert!((mv.loglik() - before - predicted).abs() < 1e-7, "v={v} s={s}");
         }
+        assert_eq!(mv.m, block_stats(&g, &mv.z).m); // the running counts are the true ones
+    }
+
+    #[test]
+    fn neosbm_with_self_loops() {
+        // Seurat's SNN graph has a unit diagonal: the running block counts must still be exact
+        let (truth, g) = planted(200, 4, 0.1, 0.02, 5);
+        let (indptr, indices) = match &g.0 {
+            Repr::F32(c) => (&c.offsets, &c.targets),
+            _ => unreachable!(),
+        };
+        let mut e: Vec<(u32, u32)> = (0..200u32).map(|v| (v, v)).collect();
+        for v in 0..200 {
+            e.extend(indices[indptr[v]..indptr[v + 1]].iter().filter(|&&u| u as usize > v).map(|&u| (v as u32, u)));
+        }
+        let g = graph(200, &e);
+        let meta: Vec<u32> = truth.iter().map(|&t| (t * 3 + 1) % 4).collect();
+        let c = match &g.0 {
+            Repr::F32(c) => c,
+            _ => unreachable!(),
+        };
+        let mut mv = Mover::new(c, &meta);
+        for i in 0..400usize {
+            let (v, s) = ((i * 7919) % 200, (i * 31) % 4);
+            let before = mv.loglik();
+            mv.deltas(v);
+            let predicted = mv.delta[s];
+            mv.apply(v, s);
+            assert!((mv.loglik() - before - predicted).abs() < 1e-7, "v={v} s={s}");
+            if i % 50 == 0 {
+                assert_eq!(mv.m, block_stats(&g, &mv.z).m, "after {i} moves");
+            }
+        }
+        let out = neosbm(&g, &meta, &[0.3], 20, &(0..200).collect::<Vec<_>>());
+        let gain = dcsbm_loglik(&block_stats(&g, &out.labels)) - dcsbm_loglik(&block_stats(&g, &meta));
+        assert!((out.loglik_gain[0] - gain).abs() < 1e-6, "{} vs {gain}", out.loglik_gain[0]);
     }
 
     #[test]
