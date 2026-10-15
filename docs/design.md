@@ -6,14 +6,19 @@ code is the reference for how.
 
 ## The guarantee
 
-**Same graph, same options, same seed: the same labels, at any thread count; on the CPU, across machines by design (tested on x86_64 and aarch64).**
+**Same graph, same options, same seed: the same labels, at any thread count; on the CPU, across machines by design (checked on x86_64 and aarch64).**
 
 - Thread count: tested bit for bit (labels and per-level graph hashes) at 1, 2, 3, 4, 8 and 16 threads
   (`tests/threads.rs`, the hao2021 lock, a random-graph harness).
-- Machine: no step depends on the platform's libm or on FMA contraction (below). The fixture labels in
-  `tests/fixtures/` were produced on x86_64 and are reproduced on aarch64 (Apple M1, `cargo test`); CI
-  compares every wheel (Linux and macOS, x86_64 and aarch64) against them (`python/tests/test_fixtures.py`).
-- GPU: with `Apply::OrderFree` the CUDA backend gives the CPU's labels bit for bit. Metal/WGSL have no
+- Machine: no step that decides a label depends on the platform's libm or on FMA contraction (below);
+  the scores (NVI, AMI, `assess`, `neosbm`) do use `ln` and may differ in the last bits. The evidence
+  is narrow: the fixture labels in `tests/fixtures/` (3k cells, small enough that the parallel
+  colouring never runs) were produced on x86_64 and are reproduced on aarch64 (Apple M1, `cargo test`),
+  and CI compares every wheel (Linux and macOS, x86_64 and aarch64) against them
+  (`python/tests/test_fixtures.py`). The hao2021 locks have been run on x86_64 only.
+- GPU (experimental): with `Apply::OrderFree` the CUDA backend has given the CPU's labels bit for bit in
+  every test so far (`tests/gpu.rs`, one RTX 2000 Ada). Not guaranteed: NVRTC compiles with FMA
+  contraction on, so a near-tie between two gains could be decided differently. Metal/WGSL have no
   f64 and run the kernels in f32 (`gpu-f32`): repeatable on a device, equality with the CPU not guaranteed
   (on hao2021 100k, one iteration, f32 kernels gave the CPU's labels on CUDA and on Metal (M1); run to
   convergence on Metal they differed, Q 0.894627 vs 0.894672).
@@ -35,7 +40,7 @@ Stage by stage (each is a GVE-Leiden kernel made deterministic):
 | stage | GVE-Leiden | here |
 |---|---|---|
 | local moving | asynchronous sweep over live labels and totals | vertices coloured into independent sets (greedy first-fit over a seeded order, computed in parallel by Jones–Plassmann, which reproduces the sequential colouring); per colour group, every vertex *decides* its best move in parallel against the frozen state, then moves are *applied* in group order |
-| apply rule | — | `Apply::Sequential` (default): in-order re-check against the updated totals. `Apply::OrderFree`: each move accepted against the group's starting totals made pessimistic by all earlier proposals (per-community prefix sums), so the result is independent of order and a GPU can reproduce it |
+| apply rule | — | `Apply::Sequential` (default): in-order re-check against the updated totals. `Apply::OrderFree`: each move accepted against the group's starting totals made pessimistic by all earlier proposals (per-community prefix sums, as in Gottesbüren & Hamann's deterministic Louvain), so the result depends on the group's seeded order but not on scheduling or summation order, and a GPU can reproduce it. Its refinement re-checks the gain, not the target cluster's well-connectedness, after earlier merges in the group |
 | pruning | affected flags on neighbours of moved vertices | the same, set after each group, so each group's work set is deterministic |
 | refinement | greedy, singletons only, atomic compare-and-undo | parallel across communities, sequential inside each; singletons only, constrained to the parent community (Algorithm 3); draw ∝ exp(Δ/θ) from the counter RNG; θ = 0 is GVE's greedy rule |
 | exp in refinement | — | graspologic-native's `(1 + x/256)^256` by eight squarings: IEEE multiplies only, bit-identical on every platform (`rng::exp_neg`) |
@@ -54,20 +59,23 @@ is where a determinism bug lives.
   exactly an f32 (scanpy connectivities are), else f64; all arithmetic is f64. Validation runs in parallel;
   symmetry is checked by a mirror lookup on canonical rows, else an O(m) transpose.
   `Graph::from_csr_trusted` skips only the symmetry check, for graphs symmetric by construction.
+  A self-loop counts once in k_v (igraph counts it twice), so on graphs with a diagonal (Seurat's SNN
+  graph) partitions differ from igraph's and leidenalg's; scanpy's connectivities have none.
 - **`Backend`** (`src/backend.rs`): `colour` / `move_nodes` / `refine` / `aggregate`. Contract: every
   kernel's output is a pure function of its inputs, never of thread count or scheduling. The level loop,
   fixed point and canonical labels (`src/lib.rs`) are shared by all backends.
   - `Cpu`: rayon.
-  - `gpu` (cubecl, features `gpu-cuda`, `gpu-wgpu`, `gpu-metal`): level-0 local moving on the device,
-    everything else on the CPU; the host reads one move counter per round; CUDA rounds are captured and
-    replayed as a graph.
+  - `gpu` (experimental; cubecl, features `gpu-cuda`, `gpu-wgpu`, `gpu-metal`): local moving,
+    refinement and aggregation on the device for level 0 from 50k vertices and coarse levels from 500k;
+    smaller levels on the CPU. The host reads one move counter per round; CUDA rounds are captured and
+    replayed as a graph. No speedup over the CPU yet (converged 1M: 21 s vs 24 s; 100k: slower).
 - **Threads** (`with_threads`, `Options.threads`): each calling thread keeps a cache of rayon pools by size,
   so repeated calls spawn no threads and an ensemble of single-threaded runs on N OS threads uses exactly N
   cores. The cache records the process id and is rebuilt in a forked child (R `mclapply`, Python
   `multiprocessing` with fork), whose copied pools have no worker threads.
 - **Stopping** (`leiden_run` → `LeidenRun { labels, iterations, stop, modularity }`):
   - `n_iterations < 0` (default): iterate until an iteration changes nothing, really (igraph before C core
-    0.10.17 ran one iteration for `n_iterations = -1`). Capped at 1000 iterations.
+    0.10.17 ran one iteration for `n_iterations = -1`). Capped at 1000 iterations (`Stop::IterationCap`).
   - `min_gain`: also stop when an iteration gains less modularity than this. The fast mode; non-inferior
     to strict convergence (below).
   - `Stop::{Converged, MinGain, IterationCap}` says which.
@@ -135,6 +143,10 @@ Metrics (`src/compare.rs`):
 Determinism makes the whole ensemble, and therefore the envelope and its scores, reproducible.
 
 ## Validation
+
+Measured outside this repository: the scripts are in `bench/py/` (`ni_test.py`, `networkit_repro.py`),
+but the graphs, the reference runs and the procedure are not, so these numbers cannot be reproduced
+from the repository yet.
 
 - **Quality:** modularity equals the converged references (leidenalg; igraph iterated to a fixed point) on
   hao2021 10k/100k (e.g. 100k: mean Q 0.89479 vs 0.89482 / 0.89480), and agreement with them sits on their
