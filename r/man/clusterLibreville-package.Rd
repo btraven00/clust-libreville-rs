@@ -11,6 +11,14 @@ Seeded, deterministic Leiden clustering of large sparse graphs, in Rust:
 \code{\link[=modularity]{modularity()}}, and \code{\link[=cluster_libreville]{cluster_libreville()}} for igraph and bluster. The same
 seed gives the same labels at any number of threads.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/btraven00/clust-libreville-rs}
+  \item Report bugs at \url{https://github.com/btraven00/clust-libreville-rs/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: btraven \email{ben.uzh@proton.me}
 

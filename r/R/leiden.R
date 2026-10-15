@@ -189,8 +189,8 @@ cluster_libreville <- function(graph, ...) {
 #'   up, as in Markov stability. `"ami"`, adjusted mutual information: a
 #'   similarity (1 = identical), corrected for the chance agreement between
 #'   partitions into many small communities.
-#' @param ... Other options of [leiden()]: `n_iterations`, `theta`,
-#'   `min_gain`, `threads`, `check_symmetry`.
+#' @param n_iterations,theta,min_gain,threads,check_symmetry Options of
+#'   [leiden()], for every run.
 #' @return A list: `domains`, a data frame with one row per partition on the
 #'   envelope in increasing resolution (`gamma_lo`, `gamma_hi`, `log_width`,
 #'   `n_communities`, and the grid point that produced it: `resolution`,

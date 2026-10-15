@@ -28,14 +28,14 @@ igraph graph, as for \code{\link[=leiden]{leiden()}}.}
 \item{gamma_range}{The range the intervals cover; \code{NULL}: the span of
 \code{resolutions}.}
 
+\item{n_iterations, theta, min_gain, threads, check_symmetry}{Options of
+\code{\link[=leiden]{leiden()}}, for every run.}
+
 \item{metric}{\code{"nvi"} (default), normalised variation of information: a
 distance (0 = identical) and a metric, so steps along the domains add
 up, as in Markov stability. \code{"ami"}, adjusted mutual information: a
 similarity (1 = identical), corrected for the chance agreement between
 partitions into many small communities.}
-
-\item{...}{Other options of \code{\link[=leiden]{leiden()}}: \code{n_iterations}, \code{theta},
-\code{min_gain}, \code{threads}, \code{check_symmetry}.}
 }
 \value{
 A list: \code{domains}, a data frame with one row per partition on the
