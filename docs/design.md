@@ -1,6 +1,6 @@
 # clust-libreville-rs: design
 
-A parallel, seeded Leiden (Traag, Waltman & van Eck 2019) for modularity with a resolution γ, built for
+A parallel, seeded Leiden (Traag, Waltman & van Eck 2019)[^traag2019] for modularity with a resolution γ, built for
 single-cell kNN graphs (10⁴–10⁶ vertices, degree ~10–30). This file records what is built and why; the
 code is the reference for how.
 
@@ -112,8 +112,7 @@ graphs' directory), `RAYON_NUM_THREADS` (the default thread count).
 
 The interface and the scores may change.
 
-`champ` (`src/champ.rs`) implements CHAMP (Weir, Emmons, Gibson, Taylor & Mucha 2017,
-doi:10.3390/a10030093). For a fixed partition, modularity is a line in γ, Q(γ) = a − γb
+`champ` (`src/champ.rs`) implements CHAMP (Weir, Emmons, Gibson, Taylor & Mucha 2017)[^weir2017]. For a fixed partition, modularity is a line in γ, Q(γ) = a − γb
 (`modularity_line`); the best partition of a pool at each γ is the upper envelope of the lines. `champ_grid`
 runs Leiden over resolutions × seeds and returns each envelope partition with its exact γ interval, which
 is optimal relative to the pool only.
@@ -127,7 +126,7 @@ Metrics (`src/compare.rs`):
 
 - **NVI** (default) = VI / H(a, b), PyGenStability's normalisation. A metric (triangle inequality), so steps
   along the envelope add up; not corrected for chance.
-- **AMI** with max normalisation (Vinh, Epps & Bailey 2010; as in the CHAMP paper): corrected for chance
+- **AMI** with max normalisation (Vinh, Epps & Bailey 2010[^vinh2010]; as in the CHAMP paper): corrected for chance
   agreement between partitions into many small communities.
 
 Determinism makes the whole ensemble, and therefore the envelope and its scores, reproducible.
@@ -146,12 +145,21 @@ Determinism makes the whole ensemble, and therefore the envelope and its scores,
 
 ## Lineage
 
-- **GVE-Leiden** (Sahu 2023, arXiv:2312.13936, MIT): the per-stage kernels, pruning, per-thread scratch,
+- **GVE-Leiden** (Sahu 2024[^sahu2024], MIT): the per-stage kernels, pruning, per-thread scratch,
   aggregation scheme, tolerance rule.
 - **leiden-rs** 0.8.1 (MIT/Apache-2.0): greedy colouring and the colour-group decide/apply skeleton.
-- **Jones–Plassmann** colouring, with Hasenplaugh et al. (SPAA 2014) for reproducing greedy order.
+- **Jones–Plassmann** colouring, with Hasenplaugh et al. (SPAA 2014)[^hasenplaugh2014] for reproducing greedy order.
 - **graspologic-native** (MIT): the portable exp.
-- **Mt-KaHyPar**'s deterministic synchronous Louvain (arXiv:2112.12704): the closest prior art.
+- **Mt-KaHyPar**'s deterministic synchronous Louvain (Gottesbüren & Hamann 2022)[^gottesburen2022]: the closest prior art.
 - **igraph**: `beta`/θ in edge-weight units; the `n_iterations` semantics.
 
 Borrowed code is cited where it is used.
+
+## References
+
+[^traag2019]: Traag VA, Waltman L, van Eck NJ. From Louvain to Leiden: guaranteeing well-connected communities. *Sci Rep*. 2019;9:5233. doi:[10.1038/s41598-019-41695-z](https://doi.org/10.1038/s41598-019-41695-z). arXiv:[1810.08473](https://arxiv.org/abs/1810.08473).
+[^weir2017]: Weir WH, Emmons S, Gibson R, Taylor D, Mucha PJ. Post-processing partitions to identify domains of modularity optimization. *Algorithms*. 2017;10(3):93. doi:[10.3390/a10030093](https://doi.org/10.3390/a10030093). arXiv:[1706.03675](https://arxiv.org/abs/1706.03675).
+[^vinh2010]: Vinh NX, Epps J, Bailey J. Information theoretic measures for clusterings comparison: variants, properties, normalization and correction for chance. *J Mach Learn Res*. 2010;11:2837–2854. [jmlr.org/papers/v11/vinh10a](https://jmlr.org/papers/v11/vinh10a.html).
+[^sahu2024]: Sahu S. GVE-Leiden: fast Leiden algorithm for community detection in shared memory setting. In: *Proc 53rd Int Conf Parallel Processing (ICPP)*. ACM; 2024:11–20. doi:[10.1145/3673038.3673146](https://doi.org/10.1145/3673038.3673146). arXiv:[2312.13936](https://arxiv.org/abs/2312.13936).
+[^hasenplaugh2014]: Hasenplaugh W, Kaler T, Schardl TB, Leiserson CE. Ordering heuristics for parallel graph coloring. In: *Proc 26th ACM Symp Parallelism in Algorithms and Architectures (SPAA)*. ACM; 2014:166–177. doi:[10.1145/2612669.2612697](https://doi.org/10.1145/2612669.2612697).
+[^gottesburen2022]: Gottesbüren L, Hamann M. Deterministic parallel hypergraph partitioning. In: *Euro-Par 2022: Parallel Processing*. LNCS 13440. Springer; 2022:301–316. doi:[10.1007/978-3-031-12597-3_19](https://doi.org/10.1007/978-3-031-12597-3_19). arXiv:[2112.12704](https://arxiv.org/abs/2112.12704).
