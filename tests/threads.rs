@@ -47,7 +47,8 @@ fn parallel_colouring_at_every_thread_count() {
 }
 
 /// The hao2021 graphs (bench/graphs, git-ignored; `DETLEIDEN_GRAPHS`): every thread count, and the locked labels
-/// exactly. Sequential: phase 1 (e3c0295) and every output-preserving change since. OrderFree:
+/// exactly. Sequential: phase 1 (e3c0295), re-locked when a rejected move was re-queued (50k seed
+/// 101 changed; mean Q unchanged on 10k/100k/154k). OrderFree:
 /// rule C moving + fixed-point sorted-column aggregation + synchronous refinement (the GPU
 /// reference; NI vs Sequential and both converged references, docs/design.md).
 /// `cargo test --release -- --ignored`
@@ -56,7 +57,7 @@ fn parallel_colouring_at_every_thread_count() {
 fn hao2021_matches_lock_at_every_thread_count() {
     let lock = [
         ("hao2021_10k", 100, Apply::Sequential, 0x87ded254a27d8377u64), ("hao2021_10k", 101, Apply::Sequential, 0x927306921a2dcc27),
-        ("hao2021_50k", 100, Apply::Sequential, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, Apply::Sequential, 0x6cd3a3991e9d2160),
+        ("hao2021_50k", 100, Apply::Sequential, 0x2e14cd1b4085cba9), ("hao2021_50k", 101, Apply::Sequential, 0xd2f29099c9fb9ddf),
         ("hao2021_100k", 100, Apply::Sequential, 0x7ec81e3557da7095), ("hao2021_100k", 101, Apply::Sequential, 0x12c848f6a5f824ac),
         ("hao2021_10k", 100, Apply::OrderFree, 0x8d7a414343580a2b), ("hao2021_10k", 101, Apply::OrderFree, 0x20f940b597024e5e),
         ("hao2021_50k", 100, Apply::OrderFree, 0x2d93ed96feb7741b), ("hao2021_50k", 101, Apply::OrderFree, 0x64e2c1dc466c0b35),

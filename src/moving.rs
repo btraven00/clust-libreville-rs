@@ -281,7 +281,12 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     let stay = m.w_from - scale * k * (tot[from] - k);
                     let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * tot[m.to as usize] };
                     if go <= stay || (m.to == NEW && size[from] == 1) {
-                        continue; // no longer an improvement, or already alone
+                        // no longer an improvement, or already alone: look again next round (its
+                        // decide cleared the flag, and a colour group moves no neighbour of v).
+                        // ponytail: OrderFree (and the GPU) still drop a rejected proposal; re-queue
+                        // there too if fixed-iteration runs need it (device list append per group)
+                        affected[v].store(true, Relaxed);
+                        continue;
                     }
                     round_gain += go - stay;
                     let to = if m.to == NEW { empty.pop().expect("an empty community exists while one has 2+ members") } else { m.to } as usize;
