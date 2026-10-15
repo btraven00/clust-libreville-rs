@@ -97,7 +97,8 @@ fn refine_one<W: Weight>(g: &Csr<W>, comm: &[u32], s: &[u32], pos: &[u32], scale
         ext[own] = 0.0;
         let (t, w) = g.row(vi);
         for (&u, &w) in t.iter().zip(w) {
-            if u != v && comm[u as usize] == c_s {
+            if u != v && comm[u as usize] == c_s && Into::<f64>::into(w) > 0.0 {
+                // (a zero-weight edge adds nothing, and would list its cluster twice in `touched`)
                 let c = refined[pos[u as usize] as usize];
                 if wt[c as usize] == 0.0 {
                     touched.push(c);
