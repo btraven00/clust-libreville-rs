@@ -1,12 +1,14 @@
 # clust-libreville-rs: design
 
-A parallel, seeded Leiden (Traag, Waltman & van Eck 2019)[^traag2019] for modularity with a resolution γ, built for
-single-cell kNN graphs (10⁴–10⁶ vertices, degree ~10–30). This file records what is built and why; the
-code is the reference for how.
+A parallel, seeded Leiden (Traag, Waltman & van Eck 2019)[^traag2019] for modularity with a resolution γ.
+
+The primary use case are single-cell kNN graphs (10⁴–10⁶ vertices, degree ~10–30), for other ranges YMMV.
+
 
 ## The guarantee
 
-**Same graph, same options, same seed: the same labels, at any thread count; on the CPU, across machines by design (checked on x86_64 and aarch64).**
+**Same graph, same options, same seed: the same labels, at any thread count; on
+the CPU, across machines by design (checked on x86_64 and aarch64).**
 
 - Thread count: tested bit for bit (labels and per-level graph hashes) at 1, 2, 3, 4, 8 and 16 threads
   (`tests/threads.rs`, the hao2021 lock, a random-graph harness).

@@ -12,8 +12,10 @@ Reproduces docs/design.md's Validation section from the graphs alone:
   igraph iterated one iteration at a time from the previous membership until it no longer changes
   (python-igraph's own n_iterations=-1 stopped after one iteration before C core 0.10.17);
 - non-inferiority of each arm against each reference (ARI; procedure below);
-- reproducibility: same-seed reruns at --threads threads of detleiden and of networkit's
-  ParallelLeiden (called as scanpy PR #4170 calls it).
+- reproducibility: same-seed reruns at --threads threads of detleiden, of networkit's
+  ParallelLeiden (called as scanpy PR #4170 calls it) and of GVE-Leiden (the conda package
+  gve-leiden from the almost-conductor channel, run through `pixi exec`; GVE has no seed, so its
+  reruns are of the same input; skipped without pixi).
 
 Non-inferiority: arm seeds a_1..a_n, reference seeds r_1..r_m (disjoint ranges). Floor
 θ_R = mean ARI(r_j, r_k) over pairs, θ_A = mean ARI(a_i, r_j), D = θ_A − θ_R. SE by delete-one-seed
@@ -33,6 +35,7 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)  # leidenalg's docstri
 
 import argparse
 import random
+import shutil
 import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -191,6 +194,28 @@ def networkit_runs(a, seed, threads, runs):
     return out
 
 
+GVE = "gve-leiden==0.0.20250408"
+
+
+def gve_runs(a, path, channel, threads, runs):
+    """GVE-Leiden reruns on `a`, through the gve-leiden package's CLI (CSR in, labels out)."""
+    import os
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            np.array([a.shape[0], a.nnz], np.int64).tofile(f)
+            a.indptr.astype(np.int64).tofile(f)
+            a.indices.astype(np.int32).tofile(f)
+            a.data.astype(np.float32).tofile(f)  # lossless: the graphs' weights are exactly f32
+    out, labels = path.with_suffix(".labels"), []
+    for _ in range(runs):
+        subprocess.run(["pixi", "exec", "-c", channel, "-c", "conda-forge", "-s", GVE, "--", "gve-leiden", path, out],
+                       check=True, stdout=subprocess.DEVNULL, env={**os.environ, "OMP_NUM_THREADS": str(threads)})
+        labels.append(np.fromfile(out, np.int32))
+    out.unlink()
+    return labels
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--graphs", default=str(ROOT / "bench" / "graphs"))
@@ -198,6 +223,7 @@ def main():
     p.add_argument("--seeds", type=int, default=20)
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--reruns", type=int, default=10, help="same-seed reruns for reproducibility")
+    p.add_argument("--gve-channel", default="https://prefix.dev/almost-conductor", help="where gve-leiden comes from")
     o = p.parse_args()
     assert RUN.exists(), f"{RUN}: cargo build --release --example run"
     report = [f"# Validation (bench/validate/validate.py, {o.seeds} seeds per arm and reference)\n"]
@@ -237,6 +263,8 @@ def main():
         say("| method | distinct | mean ARI | min ARI |\n|---|---|---|---|")
         reruns = {"detleiden": [detleiden(npz, ARM_SEEDS[0], [], o.threads, str(OUT / "tmp.npy")) for _ in range(o.reruns)],
                   "networkit ParallelLeiden": networkit_runs(a, ARM_SEEDS[0], o.threads, o.reruns)}
+        if shutil.which("pixi"):
+            reruns["GVE-Leiden"] = gve_runs(a, d / "graph.bin", o.gve_channel, o.threads, o.reruns)
         for k, v in reruns.items():
             pairs = [ari(x, y) for x, y in combinations(v, 2)]
             say(f"| {k} | {len({canon(x) for x in v})} | {np.mean(pairs):.4f} | {min(pairs):.4f} |")
