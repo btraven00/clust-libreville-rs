@@ -41,7 +41,7 @@ Stage by stage (each is a GVE-Leiden kernel made deterministic):
 | exp in refinement | — | graspologic-native's `(1 + x/256)^256` by eight squarings: IEEE multiplies only, bit-identical on every platform (`rng::exp_neg`) |
 | community members | atomic slot counter | counting sort in vertex-id order |
 | aggregation | one coarse row per community via per-thread hashtables | the same, with members in id order and neighbours in CSR order, so each row's sums and column order are fixed |
-| totals for OrderFree / GPU | atomic double adds | fixed-point integers (scale 2²⁴, `moving::FX`): integer sums are exact and associative, so atomics in any order give the same bits |
+| totals for OrderFree / GPU | atomic double adds | fixed-point integers (scale 2²⁴, `moving::FX`): integer sums are exact and associative, so atomics in any order give the same bits. The weights (and θ) are first scaled by the power of two that puts 2m in [2^27, 2^28) (exact), so the totals neither lose small weights nor overflow, at any input scale |
 | final labels | — | 0.. by community size (largest first), then smallest member id |
 
 Debugging aid: `DETLEIDEN_TRACE=1` prints per level a hash of the coarse graph (structure and exact weight

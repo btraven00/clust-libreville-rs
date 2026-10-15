@@ -158,8 +158,8 @@ pub fn leiden_gpu_traced(g: &Graph, o: &Options, min_n: usize, coarse_min_n: usi
 fn run_gpu(g: &Graph, o: &Options, gpu: gpu::Gpu, hashes: Option<&mut Vec<u64>>) -> (Vec<u32>, usize, Stop) {
     let o = &Options { apply: Apply::OrderFree, ..o.clone() }; // the rule the device runs
     with_pool(o, || match &g.0 {
-        Repr::F32(c) => iterate(&gpu, c, o, hashes),
-        Repr::F64(c) => iterate(&gpu, c, o, hashes),
+        Repr::F32(c) => scaled(c, o, |c, o| iterate(&gpu, c, o, hashes)),
+        Repr::F64(c) => scaled(c, o, |c, o| iterate(&gpu, c, o, hashes)),
     })
 }
 
@@ -208,9 +208,15 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
 
 fn run(g: &Graph, o: &Options, hashes: Option<&mut Vec<u64>>) -> (Vec<u32>, usize, Stop) {
     with_pool(o, || match &g.0 {
-        Repr::F32(c) => iterate(&Cpu, c, o, hashes),
-        Repr::F64(c) => iterate(&Cpu, c, o, hashes),
+        Repr::F32(c) => scaled(c, o, |c, o| iterate(&Cpu, c, o, hashes)),
+        Repr::F64(c) => scaled(c, o, |c, o| iterate(&Cpu, c, o, hashes)),
     })
+}
+
+/// `f` on the graph `o.apply` runs on (`Csr::for_apply`), with θ in its weight units.
+fn scaled<W: Weight, T>(c: &Csr<W>, o: &Options, f: impl FnOnce(&Csr<W>, &Options) -> T) -> T {
+    let (c, s) = c.for_apply(o.apply);
+    f(&c, &Options { theta: o.theta * s, ..o.clone() })
 }
 
 /// The iterations; returns the labels, the iterations run and why it stopped.

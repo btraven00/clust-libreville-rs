@@ -39,8 +39,9 @@ pub(crate) const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at
 pub(crate) const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
 
 /// Fixed-point scale of the OrderFree rule's totals: integer sums are exact and associative, so
-/// a GPU can form them with atomics in any order and get the CPU's bits. 2^24 keeps totals
-/// (2m <= ~5e8) below 2^53, so the f64 view `fx` is exact.
+/// a GPU can form them with atomics in any order and get the CPU's bits. The graph is first scaled
+/// so that 2m lies in [2^27, 2^28) (`Csr::for_apply`): totals stay below 2^52, and the f64 view
+/// `fx` of a total, or of a sum of two, is exact.
 pub(crate) const FX: f64 = 16_777_216.0;
 
 pub(crate) fn to_fx(k: f64) -> i64 {

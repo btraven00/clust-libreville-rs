@@ -15,15 +15,23 @@ pub(crate) trait Weight: Copy + Send + Sync + Into<f64> + 'static {
     /// The weights as f32, when that is their storage type (for GPU upload).
     #[cfg_attr(not(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal")), allow(dead_code))]
     fn as_f32(w: &[Self]) -> Option<&[f32]>;
+    /// `self * s`, exact for a power of two `s` (in range).
+    fn times(self, s: f64) -> Self;
 }
 impl Weight for f32 {
     fn as_f32(w: &[f32]) -> Option<&[f32]> {
         Some(w)
     }
+    fn times(self, s: f64) -> Self {
+        (self as f64 * s) as f32
+    }
 }
 impl Weight for f64 {
     fn as_f32(_: &[f64]) -> Option<&[f32]> {
         None
+    }
+    fn times(self, s: f64) -> Self {
+        self * s
     }
 }
 
@@ -34,6 +42,32 @@ pub(crate) struct Csr<W> {
     pub(crate) weights: Vec<W>,
     pub(crate) strength: Vec<f64>,
     pub(crate) total: f64, // 2m
+}
+
+impl<W: Weight> Csr<W> {
+    /// The graph `apply` runs on. `Apply::OrderFree` keeps its totals in fixed point (unit 2^-24,
+    /// `moving::FX`), so it first scales every weight by the power of two that puts 2m in
+    /// [2^27, 2^28): weights far below 2^-24 no longer round to 0, totals can't overflow, and a sum
+    /// of two totals stays below 2^53 (exact in the f64 view), whatever the input's scale. A power of
+    /// two is exact, and modularity and every gain only scale with it; θ, in edge-weight units,
+    /// must be multiplied by the returned factor too.
+    pub(crate) fn for_apply(&self, apply: crate::Apply) -> (std::borrow::Cow<'_, Self>, f64) {
+        use std::borrow::Cow;
+        let e = ((self.total.to_bits() >> 52) & 0x7ff) as i32 - 1023; // 2m in [2^e, 2^(e+1))
+        if apply != crate::Apply::OrderFree || self.total <= 0.0 || e == 27 {
+            return (Cow::Borrowed(self), 1.0);
+        }
+        let s = f64::from_bits((((27 - e).clamp(-1022, 1023) + 1023) as u64) << 52);
+        // ponytail: copies the structure too (8-12 bytes per edge); a scale field on Csr if that matters
+        let g = Csr {
+            offsets: self.offsets.clone(),
+            targets: self.targets.clone(),
+            weights: self.weights.par_iter().map(|&w| w.times(s)).collect(),
+            strength: self.strength.par_iter().map(|&k| k * s).collect(),
+            total: self.total * s,
+        };
+        (Cow::Owned(g), s)
+    }
 }
 
 pub(crate) enum Repr {

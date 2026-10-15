@@ -1,4 +1,4 @@
-use clust_libreville_rs::{leiden, modularity, Graph, Options};
+use clust_libreville_rs::{leiden, modularity, Apply, Graph, Options};
 
 mod common;
 use common::{graph, planted};
@@ -131,6 +131,70 @@ fn communities_are_connected_on_random_graphs() {
                 let l = leiden(&g, &Options { seed, theta, n_iterations, ..Default::default() });
                 assert!(connected_within(n, &e, &l), "seed {seed} theta {theta} n_iterations {n_iterations}");
             }
+        }
+    }
+}
+
+/// The guarantees Traag et al. (2019) prove for a converged partition, checked by brute force
+/// (exact arithmetic up to 1e-12): no vertex gains by moving to another community or to a new
+/// one (vertex optimality), and no two communities gain by merging (γ-separation).
+fn assert_locally_optimal(n: usize, edges: &[(usize, usize, f64)], l: &[u32], gamma: f64, what: &str) {
+    let k_comm = *l.iter().max().unwrap() as usize + 1;
+    let mut k = vec![0.0; n]; // strengths
+    let mut w = vec![vec![0.0; k_comm]; n]; // vertex -> community weight, excluding self-loops
+    let mut e_cc = vec![vec![0.0; k_comm]; k_comm]; // community -> community weight
+    for &(u, v, x) in edges {
+        k[u] += x;
+        k[v] += x;
+        if u != v {
+            w[u][l[v] as usize] += x;
+            w[v][l[u] as usize] += x;
+            e_cc[l[u] as usize][l[v] as usize] += x;
+            e_cc[l[v] as usize][l[u] as usize] += x;
+        }
+    }
+    let m2: f64 = k.iter().sum();
+    let mut tot = vec![0.0; k_comm];
+    for v in 0..n {
+        tot[l[v] as usize] += k[v];
+    }
+    // moving v from r to s changes Q·2m by (w_vs − w_vr) − γ k_v (tot_s − tot_r + k_v) / 2m
+    for v in 0..n {
+        let r = l[v] as usize;
+        for s in (0..k_comm).filter(|&s| s != r) {
+            let d = w[v][s] - w[v][r] - gamma * k[v] * (tot[s] - tot[r] + k[v]) / m2;
+            assert!(d <= 1e-12 * m2, "{what}: vertex {v} gains {d} by moving from {r} to {s}");
+        }
+        let d = -w[v][r] + gamma * k[v] * (tot[r] - k[v]) / m2; // to a new community
+        assert!(d <= 1e-12 * m2, "{what}: vertex {v} gains {d} alone");
+    }
+    // merging a and b changes Q·2m by 2 e_ab − 2 γ tot_a tot_b / 2m
+    for a in 0..k_comm {
+        for b in a + 1..k_comm {
+            let d = e_cc[a][b] - gamma * tot[a] * tot[b] / m2;
+            assert!(d <= 1e-12 * m2, "{what}: merging {a} and {b} gains {d}");
+        }
+    }
+}
+
+#[test]
+fn weight_scale_does_not_matter() {
+    // modularity is scale-free; OrderFree's fixed-point totals must be too (weights of 1e-9
+    // once rounded to 0 there and merged whole components). θ is in edge-weight units: it scales too.
+    let (n, e) = planted(4, 5, 16, 0.3, 0.03);
+    let at = |s: f64| graph(n, &e.iter().map(|&(u, v, w)| (u, v, w * s)).collect::<Vec<_>>());
+    for apply in [Apply::Sequential, Apply::OrderFree] {
+        let o = Options { seed: 2, apply, ..Default::default() };
+        let want = leiden(&at(1.0), &o);
+        assert_locally_optimal(n, &e, &want, 1.0, &format!("{apply:?}"));
+        for s in [2f64.powi(-40), 2f64.powi(40)] {
+            let l = leiden(&at(s), &Options { theta: o.theta * s, ..o.clone() });
+            assert_eq!(l, want, "{apply:?} at scale {s}"); // a power of two is exact
+        }
+        for s in [1e-9, 1e9] {
+            let l = leiden(&at(s), &Options { theta: o.theta * s, ..o.clone() });
+            assert_locally_optimal(n, &e, &l, 1.0, &format!("{apply:?} at scale {s}"));
+            assert!((modularity(&at(1.0), &l, 1.0) - modularity(&at(1.0), &want, 1.0)).abs() < 1e-3, "{apply:?} at scale {s}");
         }
     }
 }
