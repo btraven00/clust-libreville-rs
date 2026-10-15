@@ -7,12 +7,12 @@
 Reproduces docs/design.md's Validation section from the graphs alone:
 `cargo build --release --example run && uv run bench/validate/validate.py`.
 
-- quality: mean modularity of each detleiden arm (default = strict convergence, min_gain 1e-5,
+- quality: mean modularity of each clust-libreville-rs arm (default = strict convergence, min_gain 1e-5,
   OrderFree) and of two converged references: leidenalg (n_iterations=-1, its own fixed point) and
   igraph iterated one iteration at a time from the previous membership until it no longer changes
   (python-igraph's own n_iterations=-1 stopped after one iteration before C core 0.10.17);
 - non-inferiority of each arm against each reference (ARI; procedure below);
-- reproducibility: same-seed reruns at --threads threads of detleiden, of networkit's
+- reproducibility: same-seed reruns at --threads threads of clust-libreville-rs, of networkit's
   ParallelLeiden (called as scanpy PR #4170 calls it) and of GVE-Leiden (the conda package
   gve-leiden from the almost-conductor channel, run through `pixi exec`; GVE has no seed, so its
   reruns are of the same input; skipped without pixi).
@@ -98,7 +98,7 @@ def ari(a, b):
     return (sij - e) / ((si + sj) / 2 - e)
 
 
-def detleiden(npz, seed, extra, threads, out):
+def libreville(npz, seed, extra, threads, out):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([RUN, npz, "--seed", str(seed), "--threads", str(threads), "--trusted", "--out", out, *extra],
@@ -236,7 +236,7 @@ def main():
         say(f"\n## {name} (n {a.shape[0]})\n")
         labels = {}
         for arm, extra in ARMS.items():
-            labels[arm] = [cached(d / arm / f"{s}.npy", lambda s=s: detleiden(npz, s, extra, o.threads, str(d / arm / f"{s}.tmp.npy")))
+            labels[arm] = [cached(d / arm / f"{s}.npy", lambda s=s: libreville(npz, s, extra, o.threads, str(d / arm / f"{s}.tmp.npy")))
                            for s in ARM_SEEDS[:o.seeds]]
         with ProcessPoolExecutor() as ex:
             for impl in REFS:
@@ -261,7 +261,7 @@ def main():
                 say(f"| {arm} | {dd:+.4f} | {se:.4f} | {lb:+.4f} | {verdict(lb, ub, DELTA)} | {verdict(lb, ub, dh)} |")
         say("\nSame-seed reruns at %d threads (seed %d): distinct partitions, mean / min pairwise ARI\n" % (o.threads, ARM_SEEDS[0]))
         say("| method | distinct | mean ARI | min ARI |\n|---|---|---|---|")
-        reruns = {"detleiden": [detleiden(npz, ARM_SEEDS[0], [], o.threads, str(OUT / "tmp.npy")) for _ in range(o.reruns)],
+        reruns = {"clust-libreville-rs": [libreville(npz, ARM_SEEDS[0], [], o.threads, str(OUT / "tmp.npy")) for _ in range(o.reruns)],
                   "networkit ParallelLeiden": networkit_runs(a, ARM_SEEDS[0], o.threads, o.reruns)}
         if shutil.which("pixi"):
             reruns["GVE-Leiden"] = gve_runs(a, d / "graph.bin", o.gve_channel, o.threads, o.reruns)

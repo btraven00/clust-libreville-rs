@@ -167,11 +167,13 @@ and checksums in its card), runs 20 seeds of each clust-libreville-rs arm and of
   over both seed sets, δ = 0.024 frozen): all three arms are non-inferior to both references at every
   size, D between −0.011 and +0.005. With δ recomputed on each reference (0.021–0.033), the one exception
   is OrderFree vs leidenalg at 100k (LB −0.023 vs δ 0.021): inconclusive.
-- **Reproducibility** (10 same-seed runs at 8 threads): clust-libreville-rs gives one partition; networkit's
-  ParallelLeiden (as scanpy PR #4170 calls it) gives 10 distinct partitions at every size, mean pairwise ARI
-  0.90–0.94, about a seed change. GVE-Leiden and cuGraph behaved the same way (same-seed ARI 0.87–0.99),
-  measured outside this script (`bench/py/run_baselines.sh`, which needs the brrr-gve and sc-brrr
-  checkouts); single-threaded igraph and leidenalg are reproducible but serial.
+- **Reproducibility** (10 same-seed runs at 8 threads): clust-libreville-rs gives one partition at every
+  size. networkit's ParallelLeiden (as scanpy PR #4170 calls it) and GVE-Leiden (the conda package
+  `gve-leiden` from the almost-conductor channel: upstream at f741a40, the commit benchmarked here; no
+  seed, so same input) give 10 distinct partitions at every size, mean pairwise ARI 0.88–0.96 and
+  0.87–0.89, about a seed change. Exact values vary from run to run, which is the point. cuGraph behaved
+  the same way, measured outside this script; single-threaded igraph and leidenalg are reproducible but
+  serial.
 
 ## Lineage
 
