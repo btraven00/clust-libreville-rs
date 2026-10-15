@@ -9,7 +9,7 @@
 //! The decide step runs in parallel (order-preserving collect); the apply step is sequential,
 //! O(moves); marking the moved vertices' neighbours runs in parallel after it.
 //!
-//! Pruning as in GVE-Leiden: only vertices whose neighbourhood changed are re-examined. A flag
+//! Pruning as in GVE-Leiden (Sahu, ICPP 2024, arXiv:2312.13936, github.com/puzzlef/leiden-communities-openmp): only vertices whose neighbourhood changed are re-examined. A flag
 //! is set for each neighbour of a moved vertex that is now in another community. Neighbours of a
 //! group never move inside the group, so marking after the whole group equals marking during
 //! its apply, and the work set of every group is deterministic. The flag writes race, but they
@@ -301,7 +301,9 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     moved.push(v as u32);
                 }
             } else {
-                // OrderFree (rule C): a move is accepted against the totals frozen at the group's
+                // OrderFree (rule C; per-community prefix sums of proposals in a fixed order, as in
+                // Gottesbüren & Hamann, Euro-Par 2022, doi:10.1007/978-3-031-12597-3_19, Mt-KaHyPar's
+                // deterministic Louvain): a move is accepted against the totals frozen at the group's
                 // start, made pessimistic by every *earlier proposal* of the group (group order):
                 // the target counts all proposals into it, the source loses all proposals out of
                 // it. Totals and prefixes are fixed-point integers, so each is a function of a

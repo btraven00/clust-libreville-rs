@@ -1,4 +1,5 @@
-//! Aggregation: one coarse row per cluster, as in GVE-Leiden (`leidenAggregateEdgesOmpW`), but
+//! Aggregation: one coarse row per cluster, as in GVE-Leiden (Sahu, arXiv:2312.13936;
+//! github.com/puzzlef/leiden-communities-openmp, `leidenAggregateEdgesOmpW`), but
 //! with members in vertex-id order (a counting sort, not GVE's atomic slots). Each row's weights
 //! are summed, and its columns appear, in a fixed order, so the coarse graph is deterministic.
 //! Rows are built in parallel (per-thread scratch) and concatenated in row order.

@@ -25,7 +25,8 @@ pub(crate) fn unit(x: u64) -> f64 {
 }
 
 /// exp(x) for x <= 0, as (1 + x/256)^256: IEEE multiplies only, so bit-identical on every
-/// platform (no libm). From graspologic-native (MIT, Microsoft), `approximate_exponent`.
+/// platform (no libm). From graspologic-native (MIT, Microsoft; github.com/microsoft/graspologic-native),
+/// `approximate_exponent`. An approximation: off from e^x by about e^(-x²/512) (0.82 at x = -10).
 pub(crate) fn exp_neg(x: f64) -> f64 {
     if x < -256.0 {
         return 0.0;
