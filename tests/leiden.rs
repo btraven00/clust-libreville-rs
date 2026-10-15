@@ -125,11 +125,13 @@ fn communities_are_connected_on_random_graphs() {
         let (n, e) = planted(seed, 4, 12, 0.25, 0.05);
         let g = graph(n, &e);
         for theta in [0.01, 0.0] {
-            let l = leiden(&g, &Options { seed, theta, ..Default::default() });
-            assert!(connected_within(n, &e, &l), "seed {seed} theta {theta}: {l:?}");
-            for n_iterations in [1, 2] {
-                let l = leiden(&g, &Options { seed, theta, n_iterations, ..Default::default() });
-                assert!(connected_within(n, &e, &l), "seed {seed} theta {theta} n_iterations {n_iterations}");
+            for apply in [Apply::Sequential, Apply::OrderFree] {
+                let l = leiden(&g, &Options { seed, theta, apply, ..Default::default() });
+                assert!(connected_within(n, &e, &l), "seed {seed} theta {theta} {apply:?}: {l:?}");
+                for n_iterations in [1, 2] {
+                    let l = leiden(&g, &Options { seed, theta, n_iterations, apply, ..Default::default() });
+                    assert!(connected_within(n, &e, &l), "seed {seed} theta {theta} {apply:?} n_iterations {n_iterations}");
+                }
             }
         }
     }
@@ -178,6 +180,22 @@ fn assert_locally_optimal(n: usize, edges: &[(usize, usize, f64)], l: &[u32], ga
 }
 
 #[test]
+fn converged_partitions_are_locally_optimal() {
+    for seed in 0..40u64 {
+        let (n, e) = planted(seed, 4, 12, 0.3, 0.05);
+        let g = graph(n, &e);
+        for gamma in [0.5, 1.0, 2.0] {
+            for apply in [Apply::Sequential, Apply::OrderFree] {
+                for theta in [0.01, 0.0] {
+                    let l = leiden(&g, &Options { seed, resolution: gamma, theta, apply, ..Default::default() });
+                    assert_locally_optimal(n, &e, &l, gamma, &format!("seed {seed} γ {gamma} {apply:?} θ {theta}"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn weight_scale_does_not_matter() {
     // modularity is scale-free; OrderFree's fixed-point totals must be too (weights of 1e-9
     // once rounded to 0 there and merged whole components). θ is in edge-weight units: it scales too.
@@ -200,7 +218,7 @@ fn weight_scale_does_not_matter() {
 }
 
 #[test]
-fn converged_is_a_fixed_point() {
+fn converged_beats_one_iteration() {
     let (n, e) = planted(11, 5, 20, 0.3, 0.03);
     let g = graph(n, &e);
     let o = Options { seed: 5, ..Default::default() };

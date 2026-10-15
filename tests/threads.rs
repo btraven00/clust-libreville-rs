@@ -3,7 +3,7 @@
 use clust_libreville_rs::{leiden_traced, Apply, Graph, Options};
 
 mod common;
-use common::{bench_graph, fnv, graph, planted};
+use common::{bench_graph, fnv, graph, planted, sparse_planted};
 
 const THREADS: [usize; 6] = [1, 2, 3, 4, 8, 16];
 
@@ -28,6 +28,20 @@ fn random_graphs() {
                     same_at_every_thread_count(&g, &Options { seed, theta, n_iterations, apply, ..Default::default() });
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn parallel_colouring_at_every_thread_count() {
+    // n >= JP_MIN_N (100k), the size real data runs at: more than one thread colours by
+    // Jones–Plassmann, one thread sequentially, and both must give the same labels and levels
+    let g = sparse_planted(1, 120_000, 40, 12, 0.8, 0, 0);
+    for apply in [Apply::Sequential, Apply::OrderFree] {
+        let o = Options { seed: 3, n_iterations: 1, apply, ..Default::default() };
+        let base = leiden_traced(&g, &Options { threads: Some(1), ..o.clone() });
+        for t in [2, 8] {
+            assert_eq!(leiden_traced(&g, &Options { threads: Some(t), ..o.clone() }), base, "{apply:?} at {t} threads");
         }
     }
 }

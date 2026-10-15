@@ -81,12 +81,15 @@ is where a determinism bug lives.
   are connected inside their community, the O(m) symmetry check agrees with sorting, CHAMP's envelope,
   NVI/AMI against sklearn and PyGenStability;
 - `tests/leiden.rs`: small known graphs (karate optimum, cliques, components), connectedness of
-  communities on random graphs for both `Apply` rules, degenerate graphs (empty, no edges, self-loops),
-  the trusted graph build, `leiden_run`, CHAMP against brute force;
+  communities on random graphs for both `Apply` rules, the paper's guarantees at convergence by brute
+  force (no vertex gains by moving, no two communities gain by merging) for both rules and several γ,
+  invariance to the weights' scale, degenerate graphs (empty, no edges, self-loops), the trusted graph
+  build, `leiden_run`, CHAMP against brute force;
 - `tests/threads.rs`: labels and every level's graph hash identical at 1, 2, 3, 4, 8 and 16 threads, both
-  `Apply` rules, random graphs; `-- --ignored`: the hao2021 graphs against locked label hashes;
-- `tests/fixtures.rs`: the hao3k known answers shared with the R and Python tests, plus an `OrderFree`
-  label lock;
+  `Apply` rules, random graphs, and a 120k-vertex graph (above `JP_MIN_N`, so the parallel colouring
+  runs); `-- --ignored`: the hao2021 graphs against locked label hashes;
+- `tests/fixtures.rs`: the hao3k labels shared with the R and Python tests (regression locks: produced
+  by this code, `bench/py/make_fixtures.py`), plus an `OrderFree` label lock;
 - `tests/pools.rs`: the per-thread pool cache survives `fork()`, and `with_threads` around `leiden` does
   not nest a second pool.
 
