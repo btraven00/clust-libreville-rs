@@ -44,7 +44,8 @@ pub struct Options {
     pub resolution: f64,
     pub seed: u64,
     /// Full Leiden iterations, each starting from the previous result; negative: until an
-    /// iteration changes nothing (really, unlike igraph < 0.10.17).
+    /// iteration changes nothing (really, unlike igraph < 0.10.17), at most 1000 (then
+    /// `Stop::IterationCap`).
     pub n_iterations: i64,
     /// Refinement randomness (igraph's `beta`), in edge-weight units; 0: greedy (GVE).
     pub theta: f64,
@@ -76,7 +77,7 @@ impl Default for Options {
     }
 }
 
-const MAX_ITERATIONS: i64 = 1000; // igraph/igraph#2934: fail rather than loop forever
+const MAX_ITERATIONS: i64 = 1000; // igraph/igraph#2934: stop (Stop::IterationCap) rather than loop forever
 const MAX_LEVELS: u64 = 1000;
 
 /// `DETLEIDEN_TRACE` is set: per-iteration, per-level and per-phase diagnostics on stderr
@@ -98,7 +99,7 @@ pub enum Stop {
     Converged,
     /// `min_gain`: the last iteration gained less modularity than that.
     MinGain,
-    /// `n_iterations` iterations ran, the last of which still changed something.
+    /// `n_iterations` iterations (1000 when negative) ran, the last of which still changed something.
     IterationCap,
 }
 
@@ -247,7 +248,6 @@ fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Op
             return (labels, it as usize + 1, stop);
         }
     }
-    assert!(o.n_iterations >= 0, "Leiden did not converge in {MAX_ITERATIONS} iterations");
     (labels, cap as usize, stop)
 }
 
