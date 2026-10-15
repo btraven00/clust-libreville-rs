@@ -1,0 +1,33 @@
+# The R package as a standalone source package (r/bioc-export.sh: core crate copied in, crates.io
+# dependencies vendored) on the orphan branch r-pkg, one commit, force-pushed. r-universe builds it from
+# there: r/ alone cannot be built, its Cargo.toml points at the core crate outside the package.
+name: r-universe
+
+on:
+  push:
+    branches: [main]
+    paths: ["r/**", "src/**", "Cargo.toml", ".github/workflows/r-universe.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: r-lib/actions/setup-r@v2
+        with: { use-public-rspm: true }
+      - run: Rscript -e 'install.packages("rextendr")'
+      - run: r/bioc-export.sh "$RUNNER_TEMP/pkg"
+      - name: Push to r-pkg
+        working-directory: ${{ runner.temp }}/pkg
+        run: |
+          rm -rf src/rust/vendor  # the tarball is what the build uses
+          git init -q -b r-pkg
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit -qm "clusterLibreville from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" r-pkg
