@@ -1816,14 +1816,14 @@ impl Gpu {
         // (CUDA graph; re-encoded on wgpu) and replayed: one dispatch instead of 9 launches per
         // group. Backends without graphs run it as plain launches.
         // decide: one plane per vertex where the device has plane ops of one fixed width
-        // (DETLEIDEN_DECIDE=thread: the thread-per-vertex kernel, for A/B checks)
+        // (CLUST_LIBREVILLE_DECIDE=thread: the thread-per-vertex kernel, for A/B checks)
         const PLANES: u32 = 4; // vertices per cube
         let hw = &c.properties().hardware;
         let plane_cfg = |len: usize| (CubeCount::Static((len.min(GRID_CAP) as u32).div_ceil(PLANES), 1, 1),
                                       CubeDim::new_2d(hw.plane_size_max, PLANES));
         let use_plane = c.properties().features.plane.contains(cubecl::features::Plane::Ops)
             && hw.plane_size_min == hw.plane_size_max
-            && std::env::var("DETLEIDEN_DECIDE").map_or(true, |v| v != "thread");
+            && std::env::var("CLUST_LIBREVILLE_DECIDE").map_or(true, |v| v != "thread");
         let round = || {
             unsafe { zero1::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_moves, 1)) };
             for (gi, &glen) in lens.iter().enumerate() {
@@ -1872,7 +1872,7 @@ impl Gpu {
             }
         };
         let mut graph = None;
-        let mut capture = std::env::var_os("DETLEIDEN_NO_GRAPH").is_none() && c.graph_prepare().is_ok();
+        let mut capture = std::env::var_os("CLUST_LIBREVILLE_NO_GRAPH").is_none() && c.graph_prepare().is_ok();
         for _ in 0..moving::MAX_ROUNDS {
             rounds += 1;
             match &graph {

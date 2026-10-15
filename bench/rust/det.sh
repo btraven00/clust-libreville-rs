@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 size=$1; reruns=${2:-20}; seed=${3:-0}; niter=${4:--1}
 g=../graphs/hao2021_$size.npz
 out=../out/leiden-rs/hao2021_$size
-B="flock $HOME/phd/detleiden/bench/.cpu.lock target/release/ldbench"  # untimed, but locked so it never overlaps a timed run
+B="flock ../.cpu.lock target/release/ldbench"  # untimed, but locked so it never overlaps a timed run
 one() { # variant impl threads k
     d=$out/$1/$3t; mkdir -p $d; [ -f $d/run$4.json ] && return 0
     LEIDEN_TRACE=1 nice -n 19 $B run --graph $g --impl $2 --threads $3 --seed $seed --niter $niter \

@@ -46,7 +46,7 @@ fn parallel_colouring_at_every_thread_count() {
     }
 }
 
-/// The hao2021 graphs (bench/graphs, git-ignored; `DETLEIDEN_GRAPHS`): every thread count, and the locked labels
+/// The hao2021 graphs (bench/graphs, git-ignored; `CLUST_LIBREVILLE_GRAPHS`): every thread count, and the locked labels
 /// exactly. Sequential: phase 1 (e3c0295), re-locked when a rejected move was re-queued (50k seed
 /// 101 changed; mean Q unchanged on 10k/100k/154k). OrderFree (re-locked likewise, 50k seed 101):
 /// rule C moving + fixed-point sorted-column aggregation + synchronous refinement (the GPU

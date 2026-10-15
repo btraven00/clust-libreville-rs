@@ -123,9 +123,9 @@ pub fn read_npz(path: impl AsRef<Path>) -> Option<(Vec<usize>, Vec<u32>, Vec<f64
     Some((indptr, indices, data))
 }
 
-/// bench/graphs/<name>.npz (git-ignored; `DETLEIDEN_GRAPHS` names another directory), or None if
+/// bench/graphs/<name>.npz (git-ignored; `CLUST_LIBREVILLE_GRAPHS` names another directory), or None if
 /// it isn't there.
 pub fn bench_graph(name: &str) -> Option<Graph> {
-    let dir = std::env::var("DETLEIDEN_GRAPHS").unwrap_or_else(|_| format!("{}/bench/graphs", env!("CARGO_MANIFEST_DIR")));
+    let dir = std::env::var("CLUST_LIBREVILLE_GRAPHS").unwrap_or_else(|_| format!("{}/bench/graphs", env!("CARGO_MANIFEST_DIR")));
     load_npz(format!("{dir}/{name}.npz"))
 }

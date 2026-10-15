@@ -16,7 +16,7 @@ import anndata as ad
 import faiss
 import method
 import os
-PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and detleiden checkouts
+PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts
 
 GRAPHS = Path(__file__).resolve().parents[1] / "graphs"
 size = sys.argv[1]

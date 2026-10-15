@@ -6,7 +6,7 @@ igraph/igraph2/leidenalg: the scanpy env (sc.tl.leiden exactly as sc-brrr's base
 n_iterations -1 / 2; leidenalg = scanpy 1.12's default flavor and arguments). gve: `cd $PHD/brrr-gve && pixi run python -I`,
 brrr-gve's own method.cluster, with GVE built from bench/gve/leiden_timed.cxx (the same wrapper plus a clock);
 threads = OMP_NUM_THREADS. times: wall time of the cluster call (incl. igraph's / GVE's graph build).
-algo_times (gve only): leidenStaticOmp alone, excluding GVE's DiGraph build; comparable to detleiden's
+algo_times (gve only): leidenStaticOmp alone, excluding GVE's DiGraph build; comparable to clust-libreville-rs's
 examples/run.rs time_s, which excludes Graph::from_csr.
 """
 import argparse
@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import scipy.sparse as sp
-PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and detleiden checkouts
+PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts
 
 BENCH = Path(__file__).resolve().parents[1]
 
@@ -51,7 +51,7 @@ def gve_timed():
     import subprocess
     src, inc = BENCH / "gve" / "leiden_timed.cxx", PHD / "brrr-gve" / "gve"
     key = hashlib.sha256(src.read_bytes() + b"".join(f.read_bytes() for f in sorted((inc / "inc").glob("*.hxx")))).hexdigest()[:12]
-    lib = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "detleiden" / f"gve-timed-{key}.so"
+    lib = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "clust-libreville-rs" / f"gve-timed-{key}.so"
     if not lib.exists():
         cxx = os.environ.get("CXX") or next(iter(glob.glob(f"{sys.prefix}/bin/*-linux-gnu-c++")), "c++")
         lib.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
-# time_fair.sh [-r ROUNDS] [-t "1 8"] [-b DET_BIN] GRAPH...: "algo only" times of GVE vs detleiden (one iteration,
-# seed 100), alternating: each round runs one fresh GVE process, then one fresh detleiden process, per thread count.
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts}"
+# time_fair.sh [-r ROUNDS] [-t "1 8"] [-b DET_BIN] GRAPH...: "algo only" times of GVE vs clust-libreville-rs (one iteration,
+# seed 100), alternating: each round runs one fresh GVE process, then one fresh clust-libreville-rs process, per thread count.
 # No call is discarded as warm-up. Each process waits under bench/.cpu.lock until the machine is idle (as time_runs.sh).
 # -> bench/out/time_fair/<stamp>.tsv (graph threads impl round algo_s wall_s) and a min/median/max summary on stdout.
 # DET_BIN: build it from a clean worktree when someone else has uncommitted changes in src/.
@@ -26,7 +26,7 @@ for g in "$@"; do
             --name time-fair-gve-t$t --order seed --replicates 1 2>/dev/null | tail -1)
       echo -e "$g\t$t\tgve\t$r\t$(sed -E 's/.*algo min ([0-9.]+)s.*/\1/' <<<"$l")\t$(sed -E 's/.*time min ([0-9.]+)s.*/\1/' <<<"$l")" | tee -a "$out"
       l=$(m "$bin" "bench/graphs/$g.npz" --seed 100 --niter 1 --threads "$t" --repeat 1)
-      echo -e "$g\t$t\tdetleiden\t$r\t$(sed -E 's/.* time_s ([0-9.]+) .*/\1/' <<<"$l")\t" | tee -a "$out"
+      echo -e "$g\t$t\tclust-libreville-rs\t$r\t$(sed -E 's/.* time_s ([0-9.]+) .*/\1/' <<<"$l")\t" | tee -a "$out"
     done
   done
 done

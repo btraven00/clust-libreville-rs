@@ -80,11 +80,11 @@ impl Default for Options {
 const MAX_ITERATIONS: i64 = 1000; // igraph/igraph#2934: stop (Stop::IterationCap) rather than loop forever
 const MAX_LEVELS: u64 = 1000;
 
-/// `DETLEIDEN_TRACE` is set: per-iteration, per-level and per-phase diagnostics on stderr
+/// `CLUST_LIBREVILLE_TRACE` is set: per-iteration, per-level and per-phase diagnostics on stderr
 /// (docs/design.md). Read once per process.
 pub(crate) fn trace() -> bool {
     static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *TRACE.get_or_init(|| std::env::var_os("DETLEIDEN_TRACE").is_some())
+    *TRACE.get_or_init(|| std::env::var_os("CLUST_LIBREVILLE_TRACE").is_some())
 }
 
 /// Community labels 0.., ordered by community size (largest first), then by smallest member.

@@ -1,4 +1,4 @@
-# ldbench: leiden-rs / single-clustering bench (detleiden phase 0)
+# ldbench: leiden-rs / single-clustering bench (clust-libreville-rs phase 0)
 
 ```sh
 ./setup.sh                                   # vendor/ from the crates.io tarball + patches

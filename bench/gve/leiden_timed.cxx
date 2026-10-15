@@ -1,6 +1,6 @@
 // brrr-gve's gve/leiden.cxx wrapper (MIT; GVE-Leiden, Sahu, upstream f741a40, vendored unchanged in
 // $PHD/brrr-gve/gve/inc), plus a clock around leidenStaticOmp alone: the "algo only" time, which
-// excludes the DiGraph build and the relabelling, as detleiden's timing excludes Graph::from_csr.
+// excludes the DiGraph build and the relabelling, as clust-libreville-rs's timing excludes Graph::from_csr.
 // Built by bench/py/run_member.py with -I $PHD/brrr-gve/gve.
 #include <chrono>
 #include <cstdint>

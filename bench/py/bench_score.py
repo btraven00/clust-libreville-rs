@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import scipy.sparse as sp
 import os
-PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and detleiden checkouts
+PHD = Path(os.environ["PHD"])  # the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts
 
 BENCH = Path(__file__).resolve().parents[1]
 ARI_PY = PHD / "sc-brrr/metrics/ari.py"

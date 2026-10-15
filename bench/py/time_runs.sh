@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts}"
 # time_runs.sh <graph>...: best-of-3 wall times (gve: also algo_times, leidenStaticOmp alone) (same seed 100) under the shared lock; members bench/out/baselines/<graph>/time-*/times.json.
 # Each run waits, holding the lock, until the machine is idle (see idle()).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 PY=$PHD/sc-brrr/runs/.conda/613289a77143e229a42a609590d65392_/bin/python
-LOCK=$PHD/detleiden/bench/.cpu.lock
+LOCK=$here/../.cpu.lock
 # idle = no sc-brrr scoring and <= 2 runnable tasks (this check included), twice 1 s apart; waited for while holding the lock
 idle() { ! pgrep -f "python[^ ]* [^ ]*(score|runner)\.py" >/dev/null && [ "$(cut -d' ' -f4 /proc/loadavg | cut -d/ -f1)" -le 2 ]; }
 export -f idle

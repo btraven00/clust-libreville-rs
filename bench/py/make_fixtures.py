@@ -35,7 +35,7 @@ assert (g != g.T).nnz == 0
 OUT.mkdir(parents=True, exist_ok=True)
 mtx = OUT / "hao3k.mtx"
 scipy.io.mmwrite(mtx, sp.tril(g).tocoo(), symmetry="symmetric", precision=17,
-                 comment="hao2021 PBMC kNN connectivities (scanpy), first 3000 cells; detleiden test fixture")
+                 comment="hao2021 PBMC kNN connectivities (scanpy), first 3000 cells; clust-libreville-rs test fixture")
 back = scipy.io.mmread(mtx).tocsr()
 back.sort_indices()
 assert np.array_equal(back.toarray(), g.toarray()), "MatrixMarket round trip changed the graph"

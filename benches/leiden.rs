@@ -1,6 +1,6 @@
 //! Performance non-regression: `cargo bench -- --save-baseline main`, then after a change
 //! `cargo bench -- --baseline main`. Uses the hao2021 graphs in bench/graphs (git-ignored; skipped
-//! if absent; `DETLEIDEN_GRAPHS` names another directory). Hold the CPU lock: `flock bench/.cpu.lock cargo bench ...`. With a GPU feature
+//! if absent; `CLUST_LIBREVILLE_GRAPHS` names another directory). Hold the CPU lock: `flock bench/.cpu.lock cargo bench ...`. With a GPU feature
 //! (`--features gpu-cuda`, `gpu-metal`, `gpu-wgpu`) also the GPU path and its CPU reference
 //! (`Apply::OrderFree`), in-process, so kernel compilation falls in criterion's warm-up.
 

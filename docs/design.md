@@ -52,7 +52,7 @@ Stage by stage (each is a GVE-Leiden kernel made deterministic):
 | totals for OrderFree / GPU | atomic double adds | fixed-point integers (scale 2²⁴, `moving::FX`): integer sums are exact and associative, so atomics in any order give the same bits. The weights (and θ) are first scaled by the power of two that puts 2m in [2^27, 2^28) (exact), so the totals neither lose small weights nor overflow, at any input scale |
 | final labels | — | 0.. by community size (largest first), then smallest member id |
 
-Debugging aid: `DETLEIDEN_TRACE=1` prints per level a hash of the coarse graph (structure and exact weight
+Debugging aid: `CLUST_LIBREVILLE_TRACE=1` prints per level a hash of the coarse graph (structure and exact weight
 bits), colours, rounds, moves and phase times. The first level whose hash differs between two thread counts
 is where a determinism bug lives.
 
@@ -113,13 +113,13 @@ level 0 on the device, every level on the device, hub rows, a row too long for t
 weights. With f64 kernels (CUDA) labels and level hashes must match bit for bit, so a failure names the
 first level that differs; with `gpu-f32` (Metal) two runs must agree and the partition must be close to
 the CPU's (modularity within 1e-3, NVI below 0.1, both printed). `-- --ignored --nocapture` adds the
-bench graphs (`bench/graphs`, or `DETLEIDEN_GRAPHS`) with best-of-3 times of the CPU default, the CPU
+bench graphs (`bench/graphs`, or `CLUST_LIBREVILLE_GRAPHS`) with best-of-3 times of the CPU default, the CPU
 reference and the GPU. `bench/metal.sh [-g 10k,100k,154k,1M]` mirrors the working tree (and the chosen
 graphs) to the Mac over rsync and runs that harness there with `gpu-metal`.
 
-Knobs read from the environment: `DETLEIDEN_TRACE` (per-iteration, per-level and per-phase diagnostics,
-read once per process), `DETLEIDEN_DECIDE=thread` (the thread-per-vertex decide kernel instead of the
-plane kernel, for A/B), `DETLEIDEN_NO_GRAPH` (no CUDA graph capture), `DETLEIDEN_GRAPHS` (the bench
+Knobs read from the environment: `CLUST_LIBREVILLE_TRACE` (per-iteration, per-level and per-phase diagnostics,
+read once per process), `CLUST_LIBREVILLE_DECIDE=thread` (the thread-per-vertex decide kernel instead of the
+plane kernel, for A/B), `CLUST_LIBREVILLE_NO_GRAPH` (no CUDA graph capture), `CLUST_LIBREVILLE_GRAPHS` (the bench
 graphs' directory), `RAYON_NUM_THREADS` (the default thread count).
 
 ## Ensembles: CHAMP and agreement (experimental)
@@ -150,7 +150,7 @@ Determinism makes the whole ensemble, and therefore the envelope and its scores,
 `cargo build --release --example run && uv run bench/validate/validate.py` recomputes this section (about
 15 minutes on 16 cores). It downloads the graphs from the Hugging Face dataset
 `btraven/clust-libreville-graphs` (hao2021 PBMC kNN graphs at 10k, 50k, 100k and 154k cells; build recipe
-and checksums in its card), runs 20 seeds of each detleiden arm and of two converged references
+and checksums in its card), runs 20 seeds of each clust-libreville-rs arm and of two converged references
 (leidenalg, n_iterations = −1; igraph iterated one iteration at a time to a fixed point), and writes
 `bench/out/validate/report.md`. The procedure is in the script's docstring.
 
@@ -167,7 +167,7 @@ and checksums in its card), runs 20 seeds of each detleiden arm and of two conve
   over both seed sets, δ = 0.024 frozen): all three arms are non-inferior to both references at every
   size, D between −0.011 and +0.005. With δ recomputed on each reference (0.021–0.033), the one exception
   is OrderFree vs leidenalg at 100k (LB −0.023 vs δ 0.021): inconclusive.
-- **Reproducibility** (10 same-seed runs at 8 threads): detleiden gives one partition; networkit's
+- **Reproducibility** (10 same-seed runs at 8 threads): clust-libreville-rs gives one partition; networkit's
   ParallelLeiden (as scanpy PR #4170 calls it) gives 10 distinct partitions at every size, mean pairwise ARI
   0.90–0.94, about a seed change. GVE-Leiden and cuGraph behaved the same way (same-seed ARI 0.87–0.99),
   measured outside this script (`bench/py/run_baselines.sh`, which needs the brrr-gve and sc-brrr

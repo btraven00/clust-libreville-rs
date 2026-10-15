@@ -1,5 +1,5 @@
 %%MatrixMarket matrix coordinate real symmetric
-%hao2021 PBMC kNN connectivities (scanpy), first 3000 cells; detleiden test fixture
+%hao2021 PBMC kNN connectivities (scanpy), first 3000 cells; clust-libreville-rs test fixture
 3000 3000 20661
 27 6 1.1008836328983307e-01
 36 28 2.2647145390510559e-01

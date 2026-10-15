@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and detleiden checkouts}"
+: "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts}"
 # run_baselines.sh <graph>...: untimed baseline members (labels + determinism) into bench/out/baselines/<graph>/, then bench_score.py.
 # IMPLS="igraph2 igraph-fix leidenalg" (default) picks the 20-seed single-threaded arms. Runs hold the lock (untimed, but they would
 # perturb the other track's timings).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 PY=$PHD/sc-brrr/runs/.conda/613289a77143e229a42a609590d65392_/bin/python
-L="flock $HOME/phd/detleiden/bench/.cpu.lock"
+L="flock $here/../.cpu.lock"
 gve() { (cd $PHD/brrr-gve && OMP_NUM_THREADS=$1 $L pixi run python -I "$here/run_member.py" --impl gve "${@:2}"); }
 for g in "$@"; do
   [[ " ${IMPLS-igraph2 igraph-fix leidenalg} " == *" igraph2 "* ]] && $L $PY -I "$here/run_member.py" --impl igraph2 --graph $g --name igraph-niter2-seeds

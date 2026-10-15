@@ -10,7 +10,7 @@
 //! CPU's (modularity within 1e-3, NVI below 0.1; both printed). Synthetic graphs force every
 //! device path: level 0 on the device, coarse levels on the device, hub rows (the shared-memory
 //! sort kernels), a row too long for them (host fallback). The ignored test runs the hao2021 and
-//! syn_1M graphs from bench/graphs (`DETLEIDEN_GRAPHS`), skipping absent ones, and prints best-of-3
+//! syn_1M graphs from bench/graphs (`CLUST_LIBREVILLE_GRAPHS`), skipping absent ones, and prints best-of-3
 //! times of the CPU default, the CPU reference and the GPU (kernel compilation falls in run 1).
 #![cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
 
