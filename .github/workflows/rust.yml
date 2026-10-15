@@ -1,0 +1,28 @@
+# The core crate: clippy clean and the test suite, on x86_64 Linux and Apple silicon (the fixture
+# labels, produced on x86_64, must be reproduced on aarch64). The GPU tests need a device: tests/gpu.rs,
+# run by hand (bench/metal.sh for the Mac).
+name: rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --release

@@ -3,13 +3,9 @@
 use clust_libreville_rs::{leiden_traced, Apply, Graph, Options};
 
 mod common;
-use common::{graph, planted};
+use common::{bench_graph, fnv, graph, planted};
 
 const THREADS: [usize; 6] = [1, 2, 3, 4, 8, 16];
-
-fn fnv(labels: &[u32]) -> u64 {
-    labels.iter().flat_map(|x| x.to_le_bytes()).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
-}
 
 fn same_at_every_thread_count(g: &Graph, o: &Options) -> (Vec<u32>, Vec<u64>) {
     let base = leiden_traced(g, &Options { threads: Some(1), ..o.clone() });
@@ -36,21 +32,7 @@ fn random_graphs() {
     }
 }
 
-fn load(name: &str) -> Option<Graph> {
-    let path = format!("{}/bench/graphs/{name}.npz", env!("CARGO_MANIFEST_DIR"));
-    let mut z = npyz::npz::NpzArchive::open(&path).ok()?;
-    let mut ints = |k: &str| -> Vec<i64> {
-        let p = z.by_name(k).unwrap().unwrap();
-        if p.dtype().descr() == "'<i8'" { p.into_vec::<i64>().unwrap() } else { p.into_vec::<i32>().unwrap().into_iter().map(i64::from).collect() }
-    };
-    let indptr: Vec<usize> = ints("indptr").into_iter().map(|x| x as usize).collect();
-    let indices: Vec<u32> = ints("indices").into_iter().map(|x| x as u32).collect();
-    let p = z.by_name("data").unwrap().unwrap();
-    let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
-    Some(Graph::from_csr(&indptr, &indices, &data).unwrap())
-}
-
-/// The hao2021 graphs (bench/graphs, git-ignored): every thread count, and the locked labels
+/// The hao2021 graphs (bench/graphs, git-ignored; `DETLEIDEN_GRAPHS`): every thread count, and the locked labels
 /// exactly. Sequential: phase 1 (e3c0295) and every output-preserving change since. OrderFree:
 /// rule C moving + fixed-point sorted-column aggregation + synchronous refinement (the GPU
 /// reference; NI vs Sequential and both converged references, docs/design.md).
@@ -67,7 +49,7 @@ fn hao2021_matches_lock_at_every_thread_count() {
         ("hao2021_100k", 100, Apply::OrderFree, 0x880c906aa8088169), ("hao2021_100k", 101, Apply::OrderFree, 0x26bfb8b9d38a8315),
     ];
     for (name, seed, apply, want) in lock {
-        let Some(g) = load(name) else { eprintln!("skip {name}: no graph"); continue };
+        let Some(g) = bench_graph(name) else { eprintln!("skip {name}: no graph"); continue };
         let (labels, _) = same_at_every_thread_count(&g, &Options { seed, apply, ..Default::default() });
         assert_eq!(fnv(&labels), want, "{name} seed {seed} {apply:?}: not the locked labels");
     }

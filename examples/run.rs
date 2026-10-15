@@ -6,6 +6,9 @@
 use clust_libreville_rs::{leiden, modularity, Graph, Options};
 use std::time::Instant;
 
+#[path = "../tests/common/mod.rs"]
+mod common;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().position(|a| a == name).map(|i| args[i + 1].clone());
@@ -19,15 +22,7 @@ fn main() {
     if let Some(s) = flag("--min-gain") { o.min_gain = s.parse().unwrap(); }
     if flag("--apply").as_deref() == Some("orderfree") { o.apply = clust_libreville_rs::Apply::OrderFree; }
 
-    let mut z = npyz::npz::NpzArchive::open(&args[0]).expect("open npz");
-    let mut ints = |name: &str| -> Vec<i64> {
-        let p = z.by_name(name).unwrap().unwrap_or_else(|| panic!("no '{name}'"));
-        if p.dtype().descr() == "'<i8'" { p.into_vec::<i64>().unwrap() } else { p.into_vec::<i32>().unwrap().into_iter().map(i64::from).collect() }
-    };
-    let indptr: Vec<usize> = ints("indptr").into_iter().map(|x| x as usize).collect();
-    let indices: Vec<u32> = ints("indices").into_iter().map(|x| x as u32).collect();
-    let p = z.by_name("data").unwrap().expect("no 'data'");
-    let data: Vec<f64> = if p.dtype().descr() == "'<f4'" { p.into_vec::<f32>().unwrap().into_iter().map(f64::from).collect() } else { p.into_vec::<f64>().unwrap() };
+    let (indptr, indices, data) = common::read_npz(&args[0]).expect("open npz");
     let t = Instant::now();
     // --trusted: skip the symmetry check (inputs symmetric by construction)
     let build = if args.iter().any(|a| a == "--trusted") { Graph::from_csr_trusted } else { Graph::from_csr };

@@ -5,6 +5,11 @@
 //! Per colour group: decide -> resolve -> link -> accept -> apply -> refresh -> mark, all on the
 //! device; the host reads one move counter per round. No float atomics: totals and prefixes are
 //! fixed-point integers (moving::FX), whose sums don't depend on order.
+//!
+//! Kernel code (`#[cube]`) is written in cubecl's dialect, which these lints don't know: for-ranges
+//! over indices (no iterators), explicit casts (`Fl` is f64 or f32 by feature), nested ifs
+//! (`&&` isn't guaranteed to short-circuit), `(a + b - 1) / b`.
+#![allow(clippy::collapsible_if, clippy::needless_range_loop, clippy::unnecessary_cast, clippy::manual_div_ceil)]
 
 use std::borrow::Cow;
 
@@ -36,59 +41,19 @@ const HUB_P: usize = 1024;
 const HUB_CUBES: u32 = 64;
 const NONE: u32 = 0xFFFF_FFFF;
 // moving::NEW = u32::MAX: a move to a new community (id n + v)
-/// Below this many vertices local moving stays on the CPU (launch overheads win).
 const AG_MAX_ROW: usize = 8192; // ponytail: rank sort is O(k^2) per row; segmented sort if coarse rows grow
+/// Below this many vertices level 0 stays on the CPU (launch overheads win). `Gpu::min_n`.
 const GPU_MIN_N: usize = 50_000;
-/// Coarse levels stay on the device from this size. Smaller ones are faster on the host: on
-/// syn_1M (2026-10-11) level 1 (167k, avg degree 29) moved in 0.48 s on the GPU vs 0.20 s on the
-/// CPU, level 2 (56k, degree 58) 0.40 vs 0.08 s: denser rows, more colours, more launches.
-/// Labels are identical either way (checked with 50_000).
+/// Coarse levels stay on the device from this size (`Gpu::coarse_min_n`). Smaller ones are faster
+/// on the host: on syn_1M (2026-10-11) level 1 (167k, avg degree 29) moved in 0.48 s on the GPU vs
+/// 0.20 s on the CPU, level 2 (56k, degree 58) 0.40 vs 0.08 s: denser rows, more colours, more
+/// launches. Labels are identical either way (tests/gpu.rs forces the device path).
 const GPU_COARSE_MIN_N: usize = 500_000;
 const BLOCK: u32 = 128;
 /// Threads of the grid-stride per-group kernels (they loop over the group's affected list).
 const GRID_CAP: usize = 16_384;
 /// Jones–Plassmann rounds launched between two host reads of the frontier size.
 const JP_BATCH: usize = 8;
-
-/// Sum of row v, in CSR order: one thread per row, so the order is fixed. (Smoke test.)
-#[cube(launch_unchecked)]
-fn row_sums(offsets: &[u32], weights: &[f32], out: &mut [f32]) {
-    let v = ABSOLUTE_POS;
-    if v < out.len() {
-        let mut s = f32::new(0.0f32);
-        for i in offsets[v] as usize..offsets[v + 1] as usize {
-            s += weights[i];
-        }
-        out[v] = s;
-    }
-}
-
-/// Node strengths computed on the default device, plus (upload, kernel+read) seconds.
-#[doc(hidden)]
-pub fn row_sums_gpu(g: &Graph) -> (Vec<f32>, f64, f64) {
-    let Repr::F32(c) = &g.0 else { panic!("smoke test needs f32-exact weights") };
-    let client = cubecl::Device::default().client();
-    let n = c.n();
-    let t = std::time::Instant::now();
-    let off: Vec<u32> = c.offsets.iter().map(|&o| o as u32).collect();
-    let h_off = client.create_from_slice(u32::as_bytes(&off));
-    let h_w = client.create_from_slice(f32::as_bytes(&c.weights));
-    let h_out = client.empty(n * std::mem::size_of::<f32>());
-    let up = t.elapsed().as_secs_f64();
-    let t = std::time::Instant::now();
-    unsafe {
-        row_sums::launch_unchecked(
-            &client,
-            CubeCount::Static((n as u32).div_ceil(256), 1, 1),
-            CubeDim::new_1d(256),
-            BufferArg::from_raw_parts(h_off, off.len()),
-            BufferArg::from_raw_parts(h_w, c.weights.len()),
-            BufferArg::from_raw_parts(h_out.clone(), n),
-        )
-    };
-    let bytes = client.read_one(h_out).unwrap();
-    (f32::from_bytes(&bytes).to_vec(), up, t.elapsed().as_secs_f64())
-}
 
 /// The decide step, one thread per vertex of `verts` (skipping, and clearing, unaffected ones):
 /// an exact mirror of `moving::best_move` (same neighbour order, same f64 sums per community,
@@ -581,9 +546,9 @@ fn jp_round(offsets: &[u32], targets: &[u32], keys: &[u64], frontier: &[u32], fc
             if u != v && earlier(keys, u, v) {
                 let c = colour[u];
                 if c < 64 {
-                    lo = lo | (u64::new(1) << u64::cast_from(c));
+                    lo |= u64::new(1) << u64::cast_from(c);
                 } else if c < 128 {
-                    hi = hi | (u64::new(1) << u64::cast_from(c - 64));
+                    hi |= u64::new(1) << u64::cast_from(c - 64);
                 }
             }
         }
@@ -1542,6 +1507,7 @@ pub(crate) struct DevColouring {
     alist: Handle,
 }
 
+#[allow(clippy::large_enum_variant)] // one per level
 pub(crate) enum GpuColouring {
     Dev(DevColouring, u64, u64), // + (seed, step), to colour on the host for a fallback
     Host(Vec<Vec<u32>>),
@@ -1558,6 +1524,10 @@ impl GpuColouring {
 
 pub(crate) struct Gpu {
     client: Client,
+    /// Level 0 runs on the device from this many vertices (GPU_MIN_N).
+    min_n: usize,
+    /// Coarse levels stay on the device from this many vertices (GPU_COARSE_MIN_N).
+    coarse_min_n: usize,
 }
 
 /// Buffer argument helper (all our kernels take whole buffers).
@@ -1567,7 +1537,11 @@ fn arg(h: &Handle, len: usize) -> BufferArg {
 
 impl Gpu {
     pub(crate) fn new() -> Gpu {
-        Gpu { client: cubecl::Device::default().client() }
+        Self::with_thresholds(GPU_MIN_N, GPU_COARSE_MIN_N)
+    }
+
+    pub(crate) fn with_thresholds(min_n: usize, coarse_min_n: usize) -> Gpu {
+        Gpu { client: cubecl::Device::default().client(), min_n, coarse_min_n }
     }
 
     fn dev_graph(&self, strength: &[f64], off: Handle, targets: Handle, weights: Handle, wint: Handle, m: usize) -> DevGraph {
@@ -1603,9 +1577,9 @@ impl Gpu {
         let (cc, cd) = Self::grid(n);
         let t0 = std::time::Instant::now();
         unsafe {
-            jp_init::launch_unchecked(c, cc.clone(), cd.clone(), prefix, 0x9E37_79B9_7F4A_7C15u64, 0xBF58_476D_1CE4_E5B9u64,
+            jp_init::launch_unchecked(c, cc.clone(), cd, prefix, 0x9E37_79B9_7F4A_7C15u64, 0xBF58_476D_1CE4_E5B9u64,
                 0x94D0_49BB_1331_11EBu64, arg(&h_keys, n));
-            jp_count::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_keys, n),
+            jp_count::launch_unchecked(c, cc.clone(), cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_keys, n),
                 arg(&h_wait, n), arg(&fr, n), arg(&h_fc, 1));
         }
         // rounds in batches: round r of a batch reads its frontier size from counts[r] and writes
@@ -1623,7 +1597,7 @@ impl Gpu {
             for r in 0..JP_BATCH {
                 let at = |h: &Handle, k: usize| arg(&h.clone().offset_start(4 * k as u64), 1);
                 unsafe {
-                    jp_round::launch_unchecked(c, rc.clone(), rd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_keys, n),
+                    jp_round::launch_unchecked(c, rc.clone(), rd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_keys, n),
                         arg(&fr, n), at(&h_counts, r), arg(&h_colour, n), arg(&h_wait, n), arg(&nx, n), at(&h_counts, r + 1), arg(&h_max, 1));
                 }
                 std::mem::swap(&mut fr, &mut nx);
@@ -1635,7 +1609,7 @@ impl Gpu {
         let t0 = std::time::Instant::now();
         let ng = u32::from_bytes(&c.read_one(h_max).unwrap())[0] as usize + 1;
         let h_counts = self.up(u32::as_bytes(&vec![0u32; ng]));
-        unsafe { jp_hist::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_colour, n), arg(&h_counts, ng)) };
+        unsafe { jp_hist::launch_unchecked(c, cc.clone(), cd, arg(&h_colour, n), arg(&h_counts, ng)) };
         let counts = u32::from_bytes(&c.read_one(h_counts).unwrap()).to_vec();
         let mut goffs = vec![0u32; ng + 1];
         for g in 0..ng {
@@ -1643,7 +1617,7 @@ impl Gpu {
         }
         let (h_goffs, h_fill, h_alist) = (self.up(u32::as_bytes(&goffs)), self.up(u32::as_bytes(&vec![0u32; ng])), c.empty(n * 4));
         unsafe { jp_scatter::launch_unchecked(c, cc, cd, arg(&h_colour, n), arg(&h_goffs, ng + 1), arg(&h_fill, ng), arg(&h_alist, n)) };
-        if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+        if crate::trace() {
             let _ = c.read_one(h_fill.clone());
             eprintln!("    jp: setup {t_setup:.4} s (incl. the first touch of the uploaded graph), rounds {t_rounds:.4} s (<= {jp_rounds}), grouping {:.4} s", t0.elapsed().as_secs_f64());
         }
@@ -1652,12 +1626,13 @@ impl Gpu {
 
     /// aggregate::aggregate_fx on the device, downloaded: (offsets, columns, fixed-point weights),
     /// or None if a row has more than AG_MAX_ROW distinct columns (the rank sort is quadratic).
+    #[allow(clippy::type_complexity)]
     fn aggregate_dev(&self, d: &DevGraph, n: usize, labels: &[u32], nl: usize) -> Option<(Vec<usize>, Vec<u32>, Vec<i64>, [Handle; 3])> {
         let c = &self.client;
         let h_labels = self.up(u32::as_bytes(labels));
         let h_cap = self.up(u32::as_bytes(&vec![0u32; nl]));
         let (cc, cd) = Self::grid(n);
-        unsafe { ag_cap::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&h_labels, n), arg(&h_cap, nl)) };
+        unsafe { ag_cap::launch_unchecked(c, cc.clone(), cd, arg(&d.off, n + 1), arg(&h_labels, n), arg(&h_cap, nl)) };
         let scan = |x: &[u32]| -> Vec<u32> {
             let mut o = vec![0u32; x.len() + 1];
             for i in 0..x.len() {
@@ -1672,10 +1647,10 @@ impl Gpu {
         let h_cnt = self.up(u32::as_bytes(&vec![0u32; nl]));
         let (sc, sd) = Self::grid(slots.min(GRID_CAP));
         unsafe {
-            ag_clear::launch_unchecked(c, sc.clone(), sd.clone(), arg(&h_keys, slots), arg(&h_vals, slots));
+            ag_clear::launch_unchecked(c, sc.clone(), sd, arg(&h_keys, slots), arg(&h_vals, slots));
             ag_insert::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&h_labels, n),
                 arg(&h_cap_off, nl + 1), arg(&h_keys, slots), arg(&h_vals, 2 * slots));
-            ag_count::launch_unchecked(c, sc.clone(), sd.clone(), arg(&h_cap_off, nl + 1), nl as u32, arg(&h_keys, slots), arg(&h_cnt, nl));
+            ag_count::launch_unchecked(c, sc.clone(), sd, arg(&h_cap_off, nl + 1), nl as u32, arg(&h_keys, slots), arg(&h_cnt, nl));
         }
         let cnt = u32::from_bytes(&c.read_one(h_cnt).unwrap()).to_vec();
         if cnt.iter().any(|&k| k as usize > AG_MAX_ROW) {
@@ -1727,7 +1702,7 @@ impl Gpu {
             let verts = h_alist.clone().offset_start(goffs[gi] as u64 * 4);
             let (gc, gd) = Self::grid(len.min(GRID_CAP));
             unsafe {
-                rf_propose::launch_unchecked(c, gc.clone(), gd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m),
+                rf_propose::launch_unchecked(c, gc.clone(), gd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.wint, d.m),
                     arg(&d.strength, n), arg(&h_comm, n), arg(&h_refd, n), arg(&h_cw, n), arg(&h_size, n), arg(&h_ext, n), arg(&h_ks, n),
                     scale as Fl, theta as Fl, prefix, k0, k1, k2, arg(&verts, len), l, arg(&o_to, len), arg(&o_w, len), arg(&o_ext, len),
                     arg(&h_hubs, len), arg(&h_hub_count, 1));
@@ -1735,9 +1710,9 @@ impl Gpu {
                     arg(&d.targets, d.m), arg(&d.wint, d.m), arg(&d.strength, n), arg(&h_comm, n), arg(&h_refd, n), arg(&h_cw, n),
                     arg(&h_ext, n), arg(&h_ks, n), scale as Fl, theta as Fl, prefix, k0, k1, k2, arg(&verts, len), arg(&h_hubs, len),
                     arg(&h_hub_count, 1), arg(&o_to, len), arg(&o_w, len), arg(&o_ext, len));
-                rf_reset::launch_unchecked(c, gc.clone(), gd.clone(), l, arg(&o_to, len), arg(&h_heads, n));
-                rf_link::launch_unchecked(c, gc.clone(), gd.clone(), l, arg(&o_to, len), arg(&h_heads, n), arg(&h_next, len), arg(&h_hub_count, 1));
-                rf_accept::launch_unchecked(c, gc.clone(), gd.clone(), arg(&verts, len), l, arg(&h_keys, n), arg(&d.strength, n),
+                rf_reset::launch_unchecked(c, gc.clone(), gd, l, arg(&o_to, len), arg(&h_heads, n));
+                rf_link::launch_unchecked(c, gc.clone(), gd, l, arg(&o_to, len), arg(&h_heads, n), arg(&h_next, len), arg(&h_hub_count, 1));
+                rf_accept::launch_unchecked(c, gc.clone(), gd, arg(&verts, len), l, arg(h_keys, n), arg(&d.strength, n),
                     arg(&d.kint, n), arg(&h_cw, n), scale as Fl, arg(&o_to, len), arg(&o_w, len), arg(&h_heads, n), arg(&h_next, len),
                     arg(&h_acc, len));
                 rf_apply::launch_unchecked(c, gc, gd, arg(&verts, len), l, arg(&d.kint, n), arg(&h_acc, len), arg(&o_to, len),
@@ -1754,7 +1729,7 @@ impl Gpu {
         if n == 0 || g.total <= 0.0 {
             return (0, 0);
         }
-        let trace = std::env::var_os("DETLEIDEN_TRACE").is_some();
+        let trace = crate::trace();
         let t_all = std::time::Instant::now();
         let scale = gamma / g.total;
         let ids = 2 * n;
@@ -1774,7 +1749,7 @@ impl Gpu {
             let (ic, id) = Self::grid(ids.min(GRID_CAP));
             let (vc, vd) = Self::grid(n);
             unsafe {
-                mv_zero::launch_unchecked(c, ic.clone(), id.clone(), arg(&h_tot_int, ids), arg(&h_size, ids), arg(&h_aff, n));
+                mv_zero::launch_unchecked(c, ic.clone(), id, arg(&h_tot_int, ids), arg(&h_size, ids), arg(&h_aff, n));
                 mv_init::launch_unchecked(c, vc, vd, arg(&h_comm, n), arg(&d.kint, n), arg(&h_tot_int, 2 * ids), arg(&h_size, ids));
                 mv_tot::launch_unchecked(c, ic, id, arg(&h_tot_int, ids), arg(&h_tot, ids));
             }
@@ -1820,10 +1795,10 @@ impl Gpu {
                 unsafe {
                     begin::launch_unchecked(c, CubeCount::Static(1, 1, 1), CubeDim::new_1d(1), arg(&h_acount, ng), gi as u32, arg(&h_cur, 1));
                     match &plane {
-                        Some((pc, pd)) => decide_plane::launch_unchecked(c, pc.clone(), pd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
+                        Some((pc, pd)) => decide_plane::launch_unchecked(c, pc.clone(), *pd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
                         arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_cur, 1),
                         arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1)),
-                        None => decide::launch_unchecked(c, cc.clone(), cd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
+                        None => decide::launch_unchecked(c, cc.clone(), cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&d.weights, d.m),
                         arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids), arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_cur, 1),
                         arg(&h_aff, n), arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len), arg(&h_hubs, len), arg(&h_hub_count, 1)),
                     };
@@ -1831,30 +1806,30 @@ impl Gpu {
                         arg(&d.targets, d.m), arg(&d.weights, d.m), arg(&d.strength, n), arg(&h_comm, n), arg(&h_tot, ids),
                         arg(&h_size, ids), scale as Fl, arg(&verts, len), arg(&h_hubs, len), arg(&h_hub_count, 1), arg(&o_to, len),
                         arg(&o_wto, len), arg(&o_wfrom, len));
-                    resolve::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), n as u32, arg(&h_comm, n),
+                    resolve::launch_unchecked(c, cc.clone(), cd, arg(&verts, len), arg(&h_cur, 1), n as u32, arg(&h_comm, n),
                         arg(&o_to, len), arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids));
-                    link::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&o_to, len), arg(&r_from, len), arg(&r_to, len),
+                    link::launch_unchecked(c, cc.clone(), cd, arg(&h_cur, 1), arg(&o_to, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len), arg(&n_from, len), arg(&h_hub_count, 1));
-                    accept::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&h_keys, n), arg(&d.strength, n),
+                    accept::launch_unchecked(c, cc.clone(), cd, arg(&verts, len), arg(&h_cur, 1), arg(h_keys, n), arg(&d.strength, n),
                         arg(&d.kint, n), arg(&h_tot_int, ids), arg(&h_size, ids), scale as Fl, arg(&o_to, len), arg(&o_wto, len), arg(&o_wfrom, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_heads_to, ids), arg(&h_heads_from, ids), arg(&n_to, len),
                         arg(&n_from, len), arg(&h_acc, len));
-                    apply::launch_unchecked(c, cc.clone(), cd.clone(), arg(&verts, len), arg(&h_cur, 1), arg(&d.kint, n), arg(&h_acc, len),
+                    apply::launch_unchecked(c, cc.clone(), cd, arg(&verts, len), arg(&h_cur, 1), arg(&d.kint, n), arg(&h_acc, len),
                         arg(&r_from, len), arg(&r_to, len), arg(&h_tot_int, 2 * ids), arg(&h_size, ids), arg(&h_comm, n), arg(&h_moves, 1));
-                    refresh::launch_unchecked(c, cc.clone(), cd.clone(), arg(&h_cur, 1), arg(&h_acc, len), arg(&r_from, len), arg(&r_to, len),
+                    refresh::launch_unchecked(c, cc.clone(), cd, arg(&h_cur, 1), arg(&h_acc, len), arg(&r_from, len), arg(&r_to, len),
                         arg(&h_tot_int, ids), arg(&h_tot, ids));
                     match &plane {
-                        Some((pc, pd)) => mark_plane::launch_unchecked(c, pc.clone(), pd.clone(), arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
-                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
+                        Some((pc, pd)) => mark_plane::launch_unchecked(c, pc.clone(), *pd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
+                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
                         None => mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
-                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(&h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
+                        arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
                     };
                 }
             }
         };
         let mut graph = None;
         let mut capture = std::env::var_os("DETLEIDEN_NO_GRAPH").is_none() && c.graph_prepare().is_ok();
-        for _ in 0..1000 {
+        for _ in 0..moving::MAX_ROUNDS {
             rounds += 1;
             match &graph {
                 Some(gr) => unsafe { cubecl::client::Graph::replay(gr) }.expect("graph replay"),
@@ -1891,7 +1866,7 @@ impl Backend for Gpu {
     type Colouring = GpuColouring;
 
     fn upload<'a, W: Weight>(&self, g: &'a Csr<W>) -> Self::Graph<'a, W> {
-        let dev = (g.n() >= GPU_MIN_N).then(|| {
+        let dev = (g.n() >= self.min_n).then(|| {
             let m = g.targets.len();
             let off: Vec<u32> = g.offsets.iter().map(|&o| o as u32).collect();
             let weights = match W::as_f32(&g.weights) {
@@ -1924,7 +1899,7 @@ impl Backend for Gpu {
             Some(d) => {
                 let t = std::time::Instant::now();
                 let (lens, goffs, keys, colour, alist) = self.colour_dev(d, g.host.n(), seed, step);
-                if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+                if crate::trace() {
                     eprintln!("    colouring (GPU) n {}: {:.4} s, {} colours", g.host.n(), t.elapsed().as_secs_f64(), lens.len());
                 }
                 GpuColouring::Dev(DevColouring { lens, goffs, keys, colour, alist }, seed, step)
@@ -1955,7 +1930,7 @@ impl Backend for Gpu {
                 let host = Csr::from_parts(offsets, cols, w);
                 // the coarse graph stays on the device too (n >= GPU_COARSE_MIN_N); the host copy serves
                 // the small levels, the trace and the hashes
-                let dev = (n_labels >= GPU_COARSE_MIN_N).then(|| {
+                let dev = (n_labels >= self.coarse_min_n).then(|| {
                     let m = host.targets.len();
                     let h_w = self.client.empty(m * FB);
                     let (gc, gd) = Self::grid(m.min(GRID_CAP));

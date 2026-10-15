@@ -35,7 +35,7 @@ thread_local! {
     static USED: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
-const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
+pub(crate) const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
 pub(crate) const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
 
 /// Fixed-point scale of the OrderFree rule's totals: integer sums are exact and associative, so
@@ -74,7 +74,7 @@ pub(crate) struct Move {
 pub(crate) fn colouring<W: Weight>(g: &Csr<W>, seed: u64, step: u64) -> Vec<Vec<u32>> {
     let t = std::time::Instant::now();
     let groups = colour(g, &rng::order(g.n(), seed, rng::COLOUR_ORDER, step));
-    if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+    if crate::trace() {
         eprintln!("    colouring n {}: {:.4} s", g.n(), t.elapsed().as_secs_f64());
     }
     groups

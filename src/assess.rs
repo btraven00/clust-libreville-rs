@@ -273,9 +273,9 @@ impl<'a, W: Weight> Mover<'a, W> {
         let a = xlx(mr(r) - 2.0 * c[r]) - xlx(mr(r)); // m_rr
         // row/column r against every t ≠ r loses c_t (twice: rt and tr); the t = s term is taken out per s
         let mut d_all = 0.0;
-        for t in 0..k {
+        for (t, &ct) in c.iter().enumerate() {
             if t != r {
-                d_all += 2.0 * (xlx(mr(t) - c[t]) - xlx(mr(t)));
+                d_all += 2.0 * (xlx(mr(t) - ct) - xlx(mr(t)));
             }
         }
         let kr = -2.0 * (xlx(kap[r] - kv) - xlx(kap[r]));

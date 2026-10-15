@@ -72,6 +72,42 @@ is where a determinism bug lives.
     to strict convergence (below).
   - `Stop::{Converged, MinGain, IterationCap}` says which.
 
+## Tests
+
+`cargo test --release` (CI: `.github/workflows/rust.yml`, Linux x86_64 and macOS aarch64, with
+`cargo clippy --all-targets -- -D warnings`), about 12 s:
+
+- unit tests in the modules: the parallel colouring equals the sequential greedy pass, refined clusters
+  are connected inside their community, the O(m) symmetry check agrees with sorting, CHAMP's envelope,
+  NVI/AMI against sklearn and PyGenStability;
+- `tests/leiden.rs`: small known graphs (karate optimum, cliques, components), connectedness of
+  communities on random graphs for both `Apply` rules, degenerate graphs (empty, no edges, self-loops),
+  the trusted graph build, `leiden_run`, CHAMP against brute force;
+- `tests/threads.rs`: labels and every level's graph hash identical at 1, 2, 3, 4, 8 and 16 threads, both
+  `Apply` rules, random graphs; `-- --ignored`: the hao2021 graphs against locked label hashes;
+- `tests/fixtures.rs`: the hao3k known answers shared with the R and Python tests, plus an `OrderFree`
+  label lock;
+- `tests/pools.rs`: the per-thread pool cache survives `fork()`, and `with_threads` around `leiden` does
+  not nest a second pool.
+
+Graph builders and the .npz loader shared by tests, examples and the bench live in `tests/common/mod.rs`.
+
+**GPU** (needs a device; not in CI): `tests/gpu.rs` is the one harness for every runtime,
+`cargo test --release --features gpu-cuda --test gpu` (or `gpu-metal`, `gpu-wgpu`). It runs the device
+against the CPU reference (`leiden` with `Apply::OrderFree`) on synthetic graphs that force each path:
+level 0 on the device, every level on the device, hub rows, a row too long for the hub kernels, f64
+weights. With f64 kernels (CUDA) labels and level hashes must match bit for bit, so a failure names the
+first level that differs; with `gpu-f32` (Metal) two runs must agree and the partition must be close to
+the CPU's (modularity within 1e-3, NVI below 0.1, both printed). `-- --ignored --nocapture` adds the
+bench graphs (`bench/graphs`, or `DETLEIDEN_GRAPHS`) with best-of-3 times of the CPU default, the CPU
+reference and the GPU. `bench/metal.sh [-g 10k,100k,154k,1M]` mirrors the working tree (and the chosen
+graphs) to the Mac over rsync and runs that harness there with `gpu-metal`.
+
+Knobs read from the environment: `DETLEIDEN_TRACE` (per-iteration, per-level and per-phase diagnostics,
+read once per process), `DETLEIDEN_DECIDE=thread` (the thread-per-vertex decide kernel instead of the
+plane kernel, for A/B), `DETLEIDEN_NO_GRAPH` (no CUDA graph capture), `DETLEIDEN_GRAPHS` (the bench
+graphs' directory), `RAYON_NUM_THREADS` (the default thread count).
+
 ## Ensembles: CHAMP and agreement (experimental)
 
 The interface and the scores may change.

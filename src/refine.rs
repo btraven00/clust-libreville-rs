@@ -131,10 +131,11 @@ fn refine_one<W: Weight>(g: &Csr<W>, comm: &[u32], s: &[u32], pos: &[u32], scale
     refined
 }
 
+/// refine_orderfree's per-thread decide scratch: fixed-point weight to each refined cluster (zero
+/// between vertices), the clusters touched, candidates, cumulative probabilities.
+type OfScratch = (Vec<i64>, Vec<u32>, Vec<(u32, f64)>, Vec<f64>);
 thread_local! {
-    // refine_orderfree's decide scratch: fixed-point weight to each refined cluster (zero between
-    // vertices), the clusters touched, candidates, cumulative probabilities
-    static OF_SCRATCH: RefCell<(Vec<i64>, Vec<u32>, Vec<(u32, f64)>, Vec<f64>)> = const { RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
+    static OF_SCRATCH: RefCell<OfScratch> = const { RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
 }
 
 /// Refinement for `Apply::OrderFree`: Algorithm 3's singleton merges, made synchronous so a GPU
@@ -143,9 +144,9 @@ thread_local! {
 /// Vertices are visited once, colour group by colour group (the level's colouring: independent
 /// sets, also inside every community). In a group, every still-singleton, well-connected vertex
 /// decides in parallel against the state frozen at the group's start: its candidates are staying
-/// alone (gain 0) and the well-connected refined clusters of its community it touches with gain
-/// >= 0, in sorted cluster order, drawn as in `choose`. A proposal into C is then accepted if its
-/// gain stays >= 0 against C's frozen weight plus the earlier proposals of the group into C
+/// alone (gain 0) and the well-connected refined clusters of its community it touches with a
+/// gain of at least 0, in sorted cluster order, drawn as in `choose`. A proposal into C is then
+/// accepted if its gain stays at least 0 against C's frozen weight plus the earlier proposals of the group into C
 /// (group order), as in local moving's rule C. Weights, cluster weights and external weights are
 /// fixed-point integers (moving::FX), so every sum is order-free. Two proposals of a group are
 /// never adjacent, so external weights add exactly; every merge joins an adjacent cluster, so

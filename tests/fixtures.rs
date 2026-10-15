@@ -3,7 +3,10 @@
 
 use std::fs;
 
-use clust_libreville_rs::{leiden, Graph, Options};
+use clust_libreville_rs::{leiden, Apply, Graph, Options};
+
+mod common;
+use common::fnv;
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
 
@@ -55,6 +58,21 @@ fn hao3k_known_answers() {
         let want = &cols[names.iter().position(|&n| n == f[0]).unwrap()];
         for threads in [1, 4] {
             assert_eq!(&leiden(&g, &Options { threads: Some(threads), ..o.clone() }), want, "case {} at {threads} threads", f[0]);
+        }
+    }
+}
+
+/// `Apply::OrderFree` (the GPU reference) on the same fixture: a regression lock on the labels of
+/// three cases (the hashes were taken from the code, not from an external reference).
+#[test]
+fn hao3k_orderfree_lock() {
+    let g = read_mtx(&format!("{DIR}hao3k.mtx"));
+    let lock = [("default", 0u64, -1i64, 0x75ae09d42476b718), ("seed42", 42, -1, 0xbffd47de8e628d0a), ("niter1", 7, 1, 0x9dfe3b522c5f1d63)];
+    for (name, seed, n_iterations, want) in lock {
+        for threads in [1, 4] {
+            let o = Options { seed, n_iterations, apply: Apply::OrderFree, threads: Some(threads), ..Default::default() };
+            let got = fnv(&leiden(&g, &o));
+            assert_eq!(got, want, "{name} OrderFree at {threads} threads: {got:#018x}");
         }
     }
 }

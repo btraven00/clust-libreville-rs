@@ -17,8 +17,8 @@ mod moving;
 mod refine;
 mod rng;
 
+pub use champ::{champ, champ_grid, Agreement, Domain, Scored};
 pub use assess::{block_stats, dcsbm_loglik, description_length, label_surprise, ln_gamma, neosbm, poisson_log_tail, significance, BlockStats, NeoSbm};
-pub use champ::{champ, champ_grid, Agreement, Domain};
 pub use compare::{ami, ecs, nvi, Metric};
 pub use graph::Graph;
 use backend::{Backend, Cpu};
@@ -79,6 +79,13 @@ impl Default for Options {
 const MAX_ITERATIONS: i64 = 1000; // igraph/igraph#2934: fail rather than loop forever
 const MAX_LEVELS: u64 = 1000;
 
+/// `DETLEIDEN_TRACE` is set: per-iteration, per-level and per-phase diagnostics on stderr
+/// (docs/design.md). Read once per process.
+pub(crate) fn trace() -> bool {
+    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var_os("DETLEIDEN_TRACE").is_some())
+}
+
 /// Community labels 0.., ordered by community size (largest first), then by smallest member.
 pub fn leiden(g: &Graph, o: &Options) -> Vec<u32> {
     run(g, o, None).0
@@ -133,13 +140,27 @@ pub fn leiden_traced(g: &Graph, o: &Options) -> (Vec<u32>, Vec<u64>) {
 /// `Apply::OrderFree`: on CUDA (f64) the labels equal `leiden` with `apply: Apply::OrderFree`.
 #[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
 pub fn leiden_gpu(g: &Graph, o: &Options) -> Vec<u32> {
+    run_gpu(g, o, gpu::Gpu::new(), None).0
+}
+
+/// `leiden_gpu` with every level's graph hash (as `leiden_traced`), running on the device the
+/// levels with at least `min_n` (level 0) or `coarse_min_n` (coarse levels) vertices; the rest run
+/// on the host. For the GPU tests (tests/gpu.rs), which force every path.
+#[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
+#[doc(hidden)]
+pub fn leiden_gpu_traced(g: &Graph, o: &Options, min_n: usize, coarse_min_n: usize) -> (Vec<u32>, Vec<u64>) {
+    let mut h = Vec::new();
+    let l = run_gpu(g, o, gpu::Gpu::with_thresholds(min_n, coarse_min_n), Some(&mut h)).0;
+    (l, h)
+}
+
+#[cfg(any(feature = "gpu-cuda", feature = "gpu-wgpu", feature = "gpu-metal"))]
+fn run_gpu(g: &Graph, o: &Options, gpu: gpu::Gpu, hashes: Option<&mut Vec<u64>>) -> (Vec<u32>, usize, Stop) {
     let o = &Options { apply: Apply::OrderFree, ..o.clone() }; // the rule the device runs
-    let gpu = gpu::Gpu::new();
     with_pool(o, || match &g.0 {
-        Repr::F32(c) => iterate(&gpu, c, o, None),
-        Repr::F64(c) => iterate(&gpu, c, o, None),
+        Repr::F32(c) => iterate(&gpu, c, o, hashes),
+        Repr::F64(c) => iterate(&gpu, c, o, hashes),
     })
-    .0
 }
 
 /// Run `f` on `threads` worker threads (None: as `Options::threads`): the same cached pool `leiden`
@@ -154,6 +175,11 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
         std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
     });
+    if rayon::current_thread_index().is_some() && rayon::current_num_threads() == threads {
+        // already on a worker of a pool of that size (`with_threads` around `leiden`, as the
+        // bindings do; an ensemble worker's own pool): run there, don't nest a second pool
+        return f();
+    }
     type Pools = (u32, Vec<(usize, std::rc::Rc<rayon::ThreadPool>)>);
     thread_local! {
         // this thread's pools by size, and the process they were built in; ponytail: never freed (one
@@ -200,9 +226,9 @@ fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Op
         let next = canonical(&iteration(b, &up, &labels, o, it as u64, hashes.as_deref_mut()));
         let unchanged = next == labels;
         let mut done = unchanged;
-        if watch_gain || std::env::var_os("DETLEIDEN_TRACE").is_some() {
+        if watch_gain || trace() {
             let q_next = modularity_csr(g, &next, o.resolution);
-            if std::env::var_os("DETLEIDEN_TRACE").is_some() {
+            if trace() {
                 let changed = next.iter().zip(&labels).filter(|(a, b)| a != b).count();
                 eprintln!("ITER {it} time {:.4} changed {changed} Q {q_next:.7}", t.elapsed().as_secs_f64());
             }
@@ -241,7 +267,7 @@ fn iteration<B: Backend, W: Weight>(b: &B, g: &B::Graph<'_, W>, start: &[u32], o
 /// map from this level's nodes to the next level's, and the next level's graph.
 fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32>, o: &Options, it: u64, level: u64,
                                 hashes: Option<&mut Vec<u64>>) -> Option<(Vec<u32>, B::Graph<'static, f64>)> {
-    let trace = std::env::var_os("DETLEIDEN_TRACE").is_some();
+    let trace = trace();
     let step = it << 32 | level;
     if let Some(h) = hashes {
         h.push(b.hash(cur));

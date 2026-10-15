@@ -230,3 +230,39 @@ fn champ_grid_scores_agree_with_direct_comparisons() {
     let ami = champ_grid(&g, &grid, &[0], &o, grid[0], grid[11], Metric::Ami);
     assert!(ami.iter().all(|(_, _, a)| a.seeds.is_nan() && a.neighbours <= 1.0));
 }
+
+#[test]
+fn degenerate_graphs() {
+    for apply in [clust_libreville_rs::Apply::Sequential, clust_libreville_rs::Apply::OrderFree] {
+        let o = Options { apply, ..Default::default() };
+        let empty = Graph::from_csr(&[0], &[], &[]).unwrap();
+        assert_eq!(leiden(&empty, &o), Vec::<u32>::new());
+        assert_eq!(modularity(&empty, &[], 1.0), 0.0);
+        assert_eq!(leiden(&graph(4, &[]), &o), vec![0, 1, 2, 3]); // no edges: singletons in id order
+        assert_eq!(leiden(&graph(3, &[(0, 1, 0.0)]), &o), vec![0, 1, 2]); // a zero-weight edge is no edge
+        assert_eq!(leiden(&graph(3, &[(0, 1, 1.0)]), &o), vec![0, 0, 1]); // one edge, one isolated vertex
+        assert_eq!(leiden(&graph(2, &[(0, 0, 1.0), (1, 1, 1.0)]), &o), vec![0, 1]); // self-loops only
+        assert_eq!(leiden(&graph(1, &[(0, 0, 2.0)]), &o), vec![0]);
+    }
+}
+
+#[test]
+fn trusted_build_skips_only_the_symmetry_check() {
+    let (n, e) = planted(7, 3, 8, 0.6, 0.1);
+    let g = graph(n, &e);
+    let (mut ip, mut ix, mut d) = (vec![0usize], vec![], vec![]);
+    for v in 0..n {
+        for &(a, b, w) in &e {
+            if a == v || b == v {
+                ix.push(if a == v { b } else { a } as u32);
+                d.push(w);
+            }
+        }
+        ip.push(ix.len());
+    }
+    let t = Graph::from_csr_trusted(&ip, &ix, &d).unwrap();
+    assert_eq!(leiden(&t, &Options::default()), leiden(&g, &Options::default()));
+    assert!(Graph::from_csr_trusted(&[0, 1, 1], &[1], &[1.0]).is_ok()); // asymmetric: not checked
+    assert!(Graph::from_csr_trusted(&[0, 1, 2], &[1, 5], &[1.0, 1.0]).is_err()); // bounds: still checked
+    assert!(Graph::from_csr_trusted(&[0, 1, 2], &[1, 0], &[1.0, f64::NAN]).is_err());
+}

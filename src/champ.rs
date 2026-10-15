@@ -40,12 +40,15 @@ pub struct Agreement {
     pub seeds: f64,
 }
 
+/// A domain of the envelope with its partition and its `Agreement`: what `champ_grid` returns.
+pub type Scored = (Domain, Vec<u32>, Agreement);
+
 /// `champ` over the pool of `leiden` at every (resolution, seed), in grid order (pool index =
 /// i_resolution · seeds.len() + i_seed, numpy's `meshgrid(indexing="ij")`); the other options from `o`.
 /// Returns each domain with its partition and its `Agreement` under `metric`.
 #[allow(clippy::too_many_arguments)]
 pub fn champ_grid(g: &Graph, resolutions: &[f64], seeds: &[u64], o: &Options, gamma_min: f64, gamma_max: f64,
-                  metric: Metric) -> Vec<(Domain, Vec<u32>, Agreement)> {
+                  metric: Metric) -> Vec<Scored> {
     let pool: Vec<Vec<u32>> = resolutions.iter()
         .flat_map(|&resolution| seeds.iter().map(move |&seed| Options { resolution, seed, ..o.clone() }))
         .map(|o| leiden(g, &o))
