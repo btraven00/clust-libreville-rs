@@ -4,9 +4,9 @@
 //! `Apply::OrderFree`, bit for bit, on devices with f64 (CUDA; Metal/WGSL lack f64). That needs
 //! kernels without FMA contraction: vendor/cubecl-llvm (vendor/README.md).
 //!
-//! Per colour group: decide -> resolve -> link -> accept -> apply -> refresh -> mark, all on the
-//! device; the host reads one move counter per round. No float atomics: totals and prefixes are
-//! fixed-point integers (moving::FX), whose sums don't depend on order.
+//! Per colour group: decide -> resolve -> link -> accept -> apply -> refresh -> mark -> rejected ->
+//! requeue, all on the device; the host reads one move counter per round. No float atomics:
+//! totals and prefixes are fixed-point integers (moving::FX), whose sums don't depend on order.
 //!
 //! Kernel code (`#[cube]`) is written in cubecl's dialect, which these lints don't know: for-ranges
 //! over indices (no iterators), explicit casts (`Fl` is f64 or f32 by feature), nested ifs
@@ -820,6 +820,44 @@ fn mark_plane(offsets: &[u32], targets: &[u32], comm: &[u32], alist: &mut [u32],
                     }
                 }
                 e += pd;
+            }
+        }
+        i += stride;
+    }
+}
+
+/// The vertices of rejected proposals (`accept` said no; NONE elsewhere), for `requeue`. Copied
+/// out first because re-queueing writes this group's own list, which `verts` points into.
+#[cube(launch_unchecked)]
+fn rejected(verts: &[u32], cur: &[u32], out_to: &[u32], acc: &[u32], rq: &mut [u32]) {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        rq[i] = NONE;
+        if out_to[i] != STAY {
+            if acc[i] == 0 {
+                rq[i] = verts[i];
+            }
+        }
+        i += stride;
+    }
+}
+
+/// Flag each rejected vertex again and list it in its own group's list for the next round, as
+/// moving::move_nodes does (its decide cleared the flag; no neighbour moves within a group).
+#[cube(launch_unchecked)]
+fn requeue(cur: &[u32], rq: &[u32], affected: &[Atomic<u32>], g: u32, goffs: &[u32], acount: &[Atomic<u32>],
+           alist: &mut [u32]) {
+    let count = cur[0] as usize;
+    let stride = CUBE_COUNT * CUBE_DIM as usize;
+    let mut i = ABSOLUTE_POS;
+    while i < count {
+        let v = rq[i];
+        if v != NONE {
+            if affected[v as usize].exchange(1u32) == 0 {
+                let slot = acount[g as usize].fetch_add(1u32);
+                alist[(goffs[g as usize] + slot) as usize] = v;
             }
         }
         i += stride;
@@ -1764,6 +1802,7 @@ impl Gpu {
         let mg = lens.iter().copied().max().unwrap_or(1).max(1) as usize;
         let (o_to, o_wto, o_wfrom) = (c.empty(mg * 4), c.empty(mg * FB), c.empty(mg * FB));
         let (r_from, r_to, n_to, n_from, h_acc) = (c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4), c.empty(mg * 4));
+        let h_rq = c.empty(mg * 4);
         let (h_hubs, h_hub_count) = (c.empty(mg * 4), self.up(u32::as_bytes(&[0u32])));
         if trace {
             let _ = c.read_one(h_cur.clone());
@@ -1823,9 +1862,12 @@ impl Gpu {
                     match &plane {
                         Some((pc, pd)) => mark_plane::launch_unchecked(c, pc.clone(), *pd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
                         arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
-                        None => mark::launch_unchecked(c, cc, cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
+                        None => mark::launch_unchecked(c, cc.clone(), cd, arg(&d.off, n + 1), arg(&d.targets, d.m), arg(&h_comm, n), arg(&h_alist, n), goff,
                         arg(&h_cur, 1), arg(&h_acc, len), arg(&h_aff, n), arg(h_group_of, n), arg(&h_goffs, ng + 1), arg(&h_acount, ng)),
                     };
+                    rejected::launch_unchecked(c, cc.clone(), cd, arg(&verts, len), arg(&h_cur, 1), arg(&o_to, len), arg(&h_acc, len), arg(&h_rq, len));
+                    requeue::launch_unchecked(c, cc, cd, arg(&h_cur, 1), arg(&h_rq, len), arg(&h_aff, n), gi as u32, arg(&h_goffs, ng + 1),
+                        arg(&h_acount, ng), arg(&h_alist, n));
                 }
             }
         };

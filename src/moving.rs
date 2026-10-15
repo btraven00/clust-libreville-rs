@@ -282,9 +282,7 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     let go = if m.to == NEW { 0.0 } else { m.w_to - scale * k * tot[m.to as usize] };
                     if go <= stay || (m.to == NEW && size[from] == 1) {
                         // no longer an improvement, or already alone: look again next round (its
-                        // decide cleared the flag, and a colour group moves no neighbour of v).
-                        // ponytail: OrderFree (and the GPU) still drop a rejected proposal; re-queue
-                        // there too if fixed-iteration runs need it (device list append per group)
+                        // decide cleared the flag, and a colour group moves no neighbour of v)
                         affected[v].store(true, Relaxed);
                         continue;
                     }
@@ -332,7 +330,9 @@ pub(crate) fn move_nodes<W: Weight>(g: &Csr<W>, comm: &mut [u32], gamma: f64, to
                     cs[to].inc += kv;
                     cs[from].outg += kv;
                     cs[from].outc += 1;
-                    if ok {
+                    if !ok {
+                        affected[v].store(true, Relaxed); // as for Sequential: look again next round
+                    } else {
                         round_gain += go - stay;
                         tot_int[from] -= kv;
                         tot_int[to] += kv;
