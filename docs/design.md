@@ -145,19 +145,31 @@ Determinism makes the whole ensemble, and therefore the envelope and its scores,
 
 ## Validation
 
-Measured outside this repository: the scripts are in `bench/py/` (`ni_test.py`, `networkit_repro.py`),
-but the graphs, the reference runs and the procedure are not, so these numbers cannot be reproduced
-from the repository yet.
+`cargo build --release --example run && uv run bench/validate/validate.py` recomputes this section (about
+15 minutes on 16 cores). It downloads the graphs from the Hugging Face dataset
+`btraven/clust-libreville-graphs` (hao2021 PBMC kNN graphs at 10k, 50k, 100k and 154k cells; build recipe
+and checksums in its card), runs 20 seeds of each detleiden arm and of two converged references
+(leidenalg, n_iterations = −1; igraph iterated one iteration at a time to a fixed point), and writes
+`bench/out/validate/report.md`. The procedure is in the script's docstring.
 
-- **Quality:** modularity equals the converged references (leidenalg; igraph iterated to a fixed point) on
-  hao2021 10k/100k (e.g. 100k: mean Q 0.89479 vs 0.89482 / 0.89480), and agreement with them sits on their
-  own seed-to-seed floor.
-- **Non-inferiority** (ARI to the converged references, jackknife over seed sets, δ = 0.024): strict
-  convergence, `min_gain = 1e-5` and `Apply::OrderFree` are each non-inferior at 10k, 100k and 154k.
-- **Reproducibility of other parallel Leidens** (same seed, repeated runs at 8 threads): GVE-Leiden,
-  networkit's ParallelLeiden and cuGraph give different partitions from run to run (same-seed ARI
-  0.87–0.99, about their seed-to-seed spread); single-threaded igraph and leidenalg are reproducible but
-  serial.
+- **Quality:** mean modularity equals the references' within a seed SD (SDs 0.0003–0.0009):
+
+  | | strict | min_gain 1e-5 | OrderFree | leidenalg | igraph fixed point |
+  |---|---|---|---|---|---|
+  | 10k | 0.86350 | 0.86347 | 0.86340 | 0.86307 | 0.86334 |
+  | 50k | 0.88768 | 0.88758 | 0.88765 | 0.88766 | 0.88757 |
+  | 100k | 0.89472 | 0.89460 | 0.89460 | 0.89493 | 0.89484 |
+  | 154k | 0.89846 | 0.89837 | 0.89832 | 0.89844 | 0.89840 |
+
+- **Non-inferiority** (ARI to each reference against the reference's own seed-to-seed floor, jackknife
+  over both seed sets, δ = 0.024 frozen): all three arms are non-inferior to both references at every
+  size, D between −0.011 and +0.005. With δ recomputed on each reference (0.021–0.033), the one exception
+  is OrderFree vs leidenalg at 100k (LB −0.023 vs δ 0.021): inconclusive.
+- **Reproducibility** (10 same-seed runs at 8 threads): detleiden gives one partition; networkit's
+  ParallelLeiden (as scanpy PR #4170 calls it) gives 10 distinct partitions at every size, mean pairwise ARI
+  0.90–0.94, about a seed change. GVE-Leiden and cuGraph behaved the same way (same-seed ARI 0.87–0.99),
+  measured outside this script (`bench/py/run_baselines.sh`, which needs the brrr-gve and sc-brrr
+  checkouts); single-threaded igraph and leidenalg are reproducible but serial.
 
 ## Lineage
 
