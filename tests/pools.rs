@@ -6,7 +6,7 @@
 
 use std::sync::Mutex;
 
-use clust_libreville_rs::{leiden, with_threads, Options};
+use clust_libreville_rs::{leiden, Options};
 
 mod common;
 
@@ -51,13 +51,13 @@ fn with_threads_does_not_nest_a_second_pool() {
     let (n, edges) = common::planted(3, 4, 30, 0.3, 0.02);
     let g = common::graph(n, &edges);
     let o = Options { threads: Some(5), ..Default::default() };
-    let want = with_threads(Some(5), || leiden(&g, &o));
+    let want = clust_libreville_rs::with_threads(Some(5), || leiden(&g, &o));
     let before = threads();
     for _ in 0..3 {
-        assert_eq!(with_threads(Some(5), || leiden(&g, &o)), want);
+        assert_eq!(clust_libreville_rs::with_threads(Some(5), || leiden(&g, &o)), want);
     }
     assert_eq!(threads(), before, "repeated calls spawned threads");
     let o = Options { threads: Some(7), ..Default::default() };
-    with_threads(Some(7), || leiden(&g, &o));
+    clust_libreville_rs::with_threads(Some(7), || leiden(&g, &o));
     assert_eq!(threads(), before + 7, "a new size adds exactly its pool");
 }
