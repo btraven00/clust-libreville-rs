@@ -1,5 +1,7 @@
 # clust-libreville-rs
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23516379.svg)](https://doi.org/10.5281/zenodo.23516379)
+
 A parallel, seeded, **deterministic** Leiden for community detection on large
 sparse graphs, aimed at single-cell kNN graphs (1M+ cells).
 

@@ -4,6 +4,11 @@ title: "clust-libreville-rs: parallel, deterministic Leiden community detection"
 type: software
 version: 0.1.0
 date-released: 2026-10-21
+doi: 10.5281/zenodo.23516379
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23516380
+    description: "Version 0.1.0"
 authors:
   - given-names: Ben
     family-names: Carrillo
