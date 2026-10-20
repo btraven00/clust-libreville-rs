@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 : "${PHD:?set PHD to the directory holding the brrr-gve, sc-brrr and clust-libreville-rs checkouts}"
-# time_fair.sh [-r ROUNDS] [-t "1 8"] [-b DET_BIN] GRAPH...: "algo only" times of GVE vs clust-libreville-rs (one iteration,
+# time_fair.sh [-r ROUNDS] [-t "1 8"] [-b DET_BIN] [-a "RUN_ARGS"] GRAPH...: "algo only" times of GVE vs clust-libreville-rs (one iteration,
 # seed 100), alternating: each round runs one fresh GVE process, then one fresh clust-libreville-rs process, per thread count.
 # No call is discarded as warm-up. Each process waits under bench/.cpu.lock until the machine is idle (as time_runs.sh).
 # -> bench/out/time_fair/<stamp>.tsv (graph threads impl round algo_s wall_s) and a min/median/max summary on stdout.
-# DET_BIN: build it from a clean worktree when someone else has uncommitted changes in src/.
+# RUN_ARGS: extra flags for clust-libreville-rs (e.g. "--tol 1e-2 --theta 0": GVE's stopping rule). DET_BIN: build it from a clean worktree when someone else has uncommitted changes in src/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-rounds=5 threads="1 8" bin=target/release/examples/run
-while getopts r:t:b: o; do case $o in r) rounds=$OPTARG;; t) threads=$OPTARG;; b) bin=$OPTARG;; *) exit 2;; esac; done
+rounds=5 threads="1 8" bin=target/release/examples/run args=
+while getopts r:t:b:a: o; do case $o in r) rounds=$OPTARG;; t) threads=$OPTARG;; b) bin=$OPTARG;; a) args=$OPTARG;; *) exit 2;; esac; done
 shift $((OPTIND - 1))
 LOCK=$PWD/bench/.cpu.lock
 idle() { ! pgrep -f "python[^ ]* [^ ]*(score|runner)\.py" >/dev/null && [ "$(cut -d' ' -f4 /proc/loadavg | cut -d/ -f1)" -le 2 ]; }
@@ -16,7 +16,7 @@ export -f idle
 m() { flock "$LOCK" bash -c 'until idle && sleep 1 && idle; do sleep 5; done; "$@"' _ "$@"; }
 mkdir -p bench/out/time_fair
 out=bench/out/time_fair/$(date +%Y%m%dT%H%M%S).tsv
-echo "# $(date -Is) power=$(powerprofilesctl get 2>/dev/null || system76-power profile 2>/dev/null | sed -n "s/^Power Profile: //p" || echo ?) governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo ?) det=$bin@$(git -C "$(dirname "$bin")" rev-parse --short HEAD 2>/dev/null || echo ?)" | tee "$out"
+echo "# $(date -Is) power=$(powerprofilesctl get 2>/dev/null || system76-power profile 2>/dev/null | sed -n "s/^Power Profile: //p" || echo ?) governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo ?) det=$bin@$(git -C "$(dirname "$bin")" rev-parse --short HEAD 2>/dev/null || echo ?) args=$args" | tee "$out"
 echo -e "graph\tthreads\timpl\tround\talgo_s\twall_s" >> "$out"
 for g in "$@"; do
   for r in $(seq 1 "$rounds"); do
@@ -25,7 +25,7 @@ for g in "$@"; do
       l=$(cd $PHD/brrr-gve && m env OMP_NUM_THREADS=$t pixi run python -I "$OLDPWD/bench/py/run_member.py" --impl gve --graph "$g" \
             --name time-fair-gve-t$t --order seed --replicates 1 2>/dev/null | tail -1)
       echo -e "$g\t$t\tgve\t$r\t$(sed -E 's/.*algo min ([0-9.]+)s.*/\1/' <<<"$l")\t$(sed -E 's/.*time min ([0-9.]+)s.*/\1/' <<<"$l")" | tee -a "$out"
-      l=$(m "$bin" "bench/graphs/$g.npz" --seed 100 --niter 1 --threads "$t" --repeat 1)
+      l=$(m "$bin" "bench/graphs/$g.npz" --seed 100 --niter 1 --threads "$t" --repeat 1 $args)
       echo -e "$g\t$t\tclust-libreville-rs\t$r\t$(sed -E 's/.* time_s ([0-9.]+) .*/\1/' <<<"$l")\t" | tee -a "$out"
     done
   done
