@@ -9,7 +9,7 @@
 //! The decide step runs in parallel (order-preserving collect); the apply step is sequential,
 //! O(moves); marking the moved vertices' neighbours runs in parallel after it.
 //!
-//! Pruning as in GVE-Leiden (Sahu, ICPP 2024, arXiv:2312.13936, github.com/puzzlef/leiden-communities-openmp): only vertices whose neighbourhood changed are re-examined. A flag
+//! Pruning as in GVE-Leiden (Sahu et al., ICPP 2024, arXiv:2312.13936, github.com/puzzlef/leiden-communities-openmp): only vertices whose neighbourhood changed are re-examined. A flag
 //! is set for each neighbour of a moved vertex that is now in another community. Neighbours of a
 //! group never move inside the group, so marking after the whole group equals marking during
 //! its apply, and the work set of every group is deterministic. The flag writes race, but they
@@ -35,7 +35,7 @@ thread_local! {
     static USED: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 }
 
-pub(crate) const MAX_ROUNDS: usize = 1000; // ponytail: safety cap; GVE stops at 20 with a gain tolerance (phase 3)
+pub(crate) const MAX_ROUNDS: usize = 1000; // safety cap; GVE stops at 20 with a gain tolerance (phase 3)
 pub(crate) const NEW: u32 = u32::MAX; // "move to an empty community", resolved at apply time
 
 /// Fixed-point scale of the OrderFree rule's totals: integer sums are exact and associative, so

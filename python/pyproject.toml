@@ -7,7 +7,7 @@ name = "sc-cluster-libreville"
 description = "Parallel and deterministic implementation of the Leiden community detection algorithm"
 readme = "README.md"
 license = "MIT"
-authors = [{ name = "btraven", email = "ben.uzh@proton.me" }]
+authors = [{ name = "Ben Carrillo", email = "ben.uzh@proton.me" }]
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.22"]
 dynamic = ["version"]

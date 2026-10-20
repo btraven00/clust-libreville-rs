@@ -88,7 +88,7 @@ pub fn ami(a: &[u32], b: &[u32]) -> f64 {
 }
 
 /// E[I(a; b)] over random partitions with the same row and column totals (Vinh et al. 2010, eq. 24a).
-// ponytail: Σ over all row × column pairs, O(n · min(#rows, #cols)) worst case; fine for scoring a few
+// Σ over all row × column pairs, O(n · min(#rows, #cols)) worst case; fine for scoring a few
 // dozen CHAMP domains, prune or parallelise if it's ever called on thousands of pairs at 1e6 vertices
 fn expected_mi(t: &Table) -> f64 {
     let n = t.n as usize;

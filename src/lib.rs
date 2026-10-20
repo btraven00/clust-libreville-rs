@@ -183,7 +183,7 @@ fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
     }
     type Pools = (u32, Vec<(usize, std::rc::Rc<rayon::ThreadPool>)>);
     thread_local! {
-        // this thread's pools by size, and the process they were built in; ponytail: never freed (one
+        // this thread's pools by size, and the process they were built in; never freed (one
         // per size a thread asks for)
         static POOLS: std::cell::RefCell<Pools> = const { std::cell::RefCell::new((0, Vec::new())) };
     }

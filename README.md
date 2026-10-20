@@ -4,7 +4,7 @@ A parallel, seeded, **deterministic** Leiden for community detection on large sp
 
 The same seed gives the same labels at any thread count. The CPU code that decides labels avoids everything that varies between machines (platform `libm`, fused multiply-add, scheduling-dependent sums), and gives the same labels on x86_64 Linux and Apple M1; GPU results are repeatable on one device but may differ from the CPU's.
 
-**Status: under revision.** Implemented (CPU; experimental GPU backends via cubecl: CUDA, Metal; no speedup over the CPU yet), with bindings for R (`r/`, package `clusterLibreville`) and Python (`python/`, `pip install sc-cluster-libreville`, import `cluster_libreville`). Details and testing (CPU, GPU): [docs/design.md](docs/design.md).
+**Status: pre-release.** Implemented (CPU; experimental GPU backends via cubecl: CUDA, Metal; no speedup over the CPU yet), with bindings for R (`r/`, package `clusterLibreville`) and Python (`python/`, `pip install sc-cluster-libreville`, import `cluster_libreville`). Details and testing (CPU, GPU): [docs/design.md](docs/design.md).
 
 Lineage: GVE-Leiden (Sahu, [arXiv:2312.13936](https://arxiv.org/abs/2312.13936), MIT) is the performance reference. Its moves are asynchronous, so it is nondeterministic with more than one thread. This crate uses synchronous, deterministic moves instead.
 

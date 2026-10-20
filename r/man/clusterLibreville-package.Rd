@@ -20,11 +20,11 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: btraven \email{ben.uzh@proton.me}
+\strong{Maintainer}: Ben Carrillo \email{ben.uzh@proton.me} (\href{https://orcid.org/0009-0003-5704-4151}{ORCID})
 
 Authors:
 \itemize{
-  \item btraven \email{ben.uzh@proton.me}
+  \item Ben Carrillo \email{ben.uzh@proton.me} (\href{https://orcid.org/0009-0003-5704-4151}{ORCID})
 }
 
 }

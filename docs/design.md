@@ -177,7 +177,7 @@ and checksums in its card), runs 20 seeds of each clust-libreville-rs arm and of
 
 ## Lineage
 
-- **GVE-Leiden** (Sahu 2024[^sahu2024], MIT): the per-stage kernels, pruning, per-thread scratch,
+- **GVE-Leiden** (Sahu, Kothapalli & Banerjee 2024[^sahu2024], MIT): the per-stage kernels, pruning, per-thread scratch,
   aggregation scheme, tolerance rule.
 - **leiden-rs** 0.8.1 (MIT/Apache-2.0): greedy colouring and the colour-group decide/apply skeleton.
 - **Jones–Plassmann** colouring, with Hasenplaugh et al. (SPAA 2014)[^hasenplaugh2014] for reproducing greedy order.
@@ -192,6 +192,6 @@ Borrowed code is cited where it is used.
 [^traag2019]: Traag VA, Waltman L, van Eck NJ. From Louvain to Leiden: guaranteeing well-connected communities. *Sci Rep*. 2019;9:5233. doi:[10.1038/s41598-019-41695-z](https://doi.org/10.1038/s41598-019-41695-z). arXiv:[1810.08473](https://arxiv.org/abs/1810.08473).
 [^weir2017]: Weir WH, Emmons S, Gibson R, Taylor D, Mucha PJ. Post-processing partitions to identify domains of modularity optimization. *Algorithms*. 2017;10(3):93. doi:[10.3390/a10030093](https://doi.org/10.3390/a10030093). arXiv:[1706.03675](https://arxiv.org/abs/1706.03675).
 [^vinh2010]: Vinh NX, Epps J, Bailey J. Information theoretic measures for clusterings comparison: variants, properties, normalization and correction for chance. *J Mach Learn Res*. 2010;11:2837–2854. [jmlr.org/papers/v11/vinh10a](https://jmlr.org/papers/v11/vinh10a.html).
-[^sahu2024]: Sahu S. GVE-Leiden: fast Leiden algorithm for community detection in shared memory setting. In: *Proc 53rd Int Conf Parallel Processing (ICPP)*. ACM; 2024:11–20. doi:[10.1145/3673038.3673146](https://doi.org/10.1145/3673038.3673146). arXiv:[2312.13936](https://arxiv.org/abs/2312.13936).
+[^sahu2024]: Sahu S, Kothapalli K, Banerjee DS. Fast Leiden algorithm for community detection in shared memory setting. In: *Proceedings of the 53rd International Conference on Parallel Processing (ICPP '24)*. ACM; 2024:11–20. doi:[10.1145/3673038.3673146](https://doi.org/10.1145/3673038.3673146). arXiv:[2312.13936](https://arxiv.org/abs/2312.13936).
 [^hasenplaugh2014]: Hasenplaugh W, Kaler T, Schardl TB, Leiserson CE. Ordering heuristics for parallel graph coloring. In: *Proc 26th ACM Symp Parallelism in Algorithms and Architectures (SPAA)*. ACM; 2014:166–177. doi:[10.1145/2612669.2612697](https://doi.org/10.1145/2612669.2612697).
 [^gottesburen2022]: Gottesbüren L, Hamann M. Deterministic parallel hypergraph partitioning. In: *Euro-Par 2022: Parallel Processing*. LNCS 13440. Springer; 2022:301–316. doi:[10.1007/978-3-031-12597-3_19](https://doi.org/10.1007/978-3-031-12597-3_19). arXiv:[2112.12704](https://arxiv.org/abs/2112.12704).

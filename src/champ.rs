@@ -33,7 +33,7 @@ pub struct Agreement {
     pub prev: f64,
     /// Mean with the previous and the next domain's partitions: a partition close to its neighbours sits
     /// on a plateau, a large step marks a boundary.
-    // ponytail: unweighted; weight by neighbour widths if sliver domains turn out to dominate
+    // unweighted; weight by neighbour widths if sliver domains turn out to dominate
     pub neighbours: f64,
     /// Mean with the other seeds' partitions at the grid resolution that produced it: how often another
     /// seed would have given (about) the same partition. Algorithmic noise, not structure.
@@ -71,7 +71,7 @@ pub fn champ_grid(g: &Graph, resolutions: &[f64], seeds: &[u64], o: &Options, ga
     })
 }
 
-// ponytail: gift wrapping, O(pool × envelope); sort + stack (O(P log P)) if pools reach ~1e5 partitions
+// gift wrapping, O(pool × envelope); sort + stack (O(P log P)) if pools reach ~1e5 partitions
 fn envelope(lines: &[(f64, f64)], lo: f64, hi: f64) -> Vec<Domain> {
     let q = |i: usize, x: f64| lines[i].0 - x * lines[i].1;
     // "i before j": higher at x, then flatter (it stays ahead to the right), then lower index

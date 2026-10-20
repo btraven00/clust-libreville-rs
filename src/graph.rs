@@ -58,7 +58,7 @@ impl<W: Weight> Csr<W> {
             return (Cow::Borrowed(self), 1.0);
         }
         let s = f64::from_bits((((27 - e).clamp(-1022, 1023) + 1023) as u64) << 52);
-        // ponytail: copies the structure too (8-12 bytes per edge); a scale field on Csr if that matters
+        // copies the structure too (8-12 bytes per edge); a scale field on Csr if that matters
         let g = Csr {
             offsets: self.offsets.clone(),
             targets: self.targets.clone(),

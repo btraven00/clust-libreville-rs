@@ -1,6 +1,6 @@
 ---
 title: "Deterministic Leiden clustering with clusterLibreville"
-author: "btraven"
+author: "Ben Carrillo"
 date: "`r Sys.Date()`"
 output: BiocStyle::html_document
 vignette: >

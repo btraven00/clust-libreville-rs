@@ -15,7 +15,7 @@ for g in "$@"; do
     (cd $PHD/brrr-gve && m env OMP_NUM_THREADS=$t pixi run python -I "$here/run_member.py" --impl gve --graph $g --name time-gve-seed-t$t --order seed --replicates 3 --seed_stride 0)
   done
   for i in igraph igraph2 igraph-fix leidenalg; do
-    r=3; [[ $g == syn_1M && $i != igraph2 && $i != igraph ]] && r=1  # ponytail: 1M converged runs take minutes; best of 1 there
+    r=3; [[ $g == syn_1M && $i != igraph2 && $i != igraph ]] && r=1  # 1M converged runs take minutes; best of 1 there
     m env OMP_NUM_THREADS=1 $PY -I "$here/run_member.py" --impl $i --graph $g --name time-$i --replicates $r --seed_stride 0
   done
 done

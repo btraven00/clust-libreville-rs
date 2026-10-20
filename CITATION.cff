@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "clust-libreville-rs: parallel, deterministic Leiden community detection"
+type: software
+authors:
+  - given-names: Ben
+    family-names: Carrillo
+    alias: btraven
+    email: ben.uzh@proton.me
+    orcid: "https://orcid.org/0009-0003-5704-4151"
+repository-code: "https://github.com/btraven00/clust-libreville-rs"
+license: MIT
+keywords:
+  - Leiden
+  - community detection
+  - clustering
+  - single-cell
+  - determinism
+references:
+  - type: conference-paper
+    title: "Fast Leiden Algorithm for Community Detection in Shared Memory Setting"
+    authors:
+      - family-names: Sahu
+        given-names: Subhajit
+      - family-names: Kothapalli
+        given-names: Kishore
+      - family-names: Banerjee
+        given-names: Dip Sankar
+    collection-title: "Proceedings of the 53rd International Conference on Parallel Processing"
+    publisher:
+      name: ACM
+    conference:
+      name: "ICPP '24"
+      location: "Gotland, Sweden"
+    year: 2024
+    start: 11
+    end: 20
+    doi: 10.1145/3673038.3673146
+  - type: article
+    title: "From Louvain to Leiden: guaranteeing well-connected communities"
+    authors:
+      - family-names: Traag
+        given-names: Vincent A.
+      - family-names: Waltman
+        given-names: Ludo
+      - family-names: van Eck
+        given-names: Nees Jan
+    journal: Scientific Reports
+    year: 2019
+    volume: 9
+    doi: 10.1038/s41598-019-41695-z

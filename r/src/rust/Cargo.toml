@@ -15,7 +15,7 @@ path = 'document.rs'
 
 [dependencies]
 extendr-api = '0.9'
-# ponytail: path dep, so install from the repo (R CMD INSTALL r); vendor it before building a CRAN tarball
+# path dep, so install from the repo (R CMD INSTALL r); vendor it before building a CRAN tarball
 dl = { package = 'clust-libreville-rs', path = '../../..' }
 
 [profile.release]

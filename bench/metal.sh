@@ -7,10 +7,10 @@
 #   bench/metal.sh                       # the synthetic GPU tests
 #   bench/metal.sh -g 10k,100k,154k      # + the bench graphs with times (-- --ignored --nocapture is implied by -g)
 #   bench/metal.sh -g 1M -- bench_graphs --ignored --nocapture
-# REMOTE (ssh host, default macmini) and REMOTE_DIR (default freeville/detleiden-mac/detleiden) override the target.
+# REMOTE (ssh host) and REMOTE_DIR (the checkout on it) are required.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-remote=${REMOTE:-macmini} dir=${REMOTE_DIR:-freeville/detleiden-mac/detleiden}
+remote=${REMOTE:?set REMOTE to the ssh host of the Mac} dir=${REMOTE_DIR:?set REMOTE_DIR to the checkout on it}
 graphs= sync_only=
 while getopts g:n o; do case $o in g) graphs=$OPTARG;; n) sync_only=1;; *) exit 2;; esac; done
 shift $((OPTIND - 1))

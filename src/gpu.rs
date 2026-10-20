@@ -43,7 +43,7 @@ const HUB_P: usize = 1024;
 const HUB_CUBES: u32 = 64;
 const NONE: u32 = 0xFFFF_FFFF;
 // moving::NEW = u32::MAX: a move to a new community (id n + v)
-const AG_MAX_ROW: usize = 8192; // ponytail: rank sort is O(k^2) per row; segmented sort if coarse rows grow
+const AG_MAX_ROW: usize = 8192; // rank sort is O(k^2) per row; segmented sort if coarse rows grow
 /// Below this many vertices level 0 stays on the CPU (launch overheads win). `Gpu::min_n`.
 const GPU_MIN_N: usize = 50_000;
 /// Coarse levels stay on the device from this size (`Gpu::coarse_min_n`). Smaller ones are faster
@@ -1960,7 +1960,7 @@ impl Backend for Gpu {
     fn refine<W: Weight>(&self, g: &Self::Graph<'_, W>, comm: &[u32], gamma: f64, theta: f64, seed: u64, step: u64, apply: Apply,
                          col: &Self::Colouring) -> (Vec<u32>, usize) {
         match (&g.dev, col) {
-            // ponytail: rf_hubs sorts at most HUB_P edges; longer rows (none in kNN graphs) refine on the host
+            // rf_hubs sorts at most HUB_P edges; longer rows (none in kNN graphs) refine on the host
             (Some(d), GpuColouring::Dev(dc, ..)) if apply == Apply::OrderFree && g.host.offsets.windows(2).all(|o| o[1] - o[0] <= HUB_P) => {
                 self.refine_dev(d, g.host.n(), comm, gamma, theta, seed, step, g.host.total, dc)
             }

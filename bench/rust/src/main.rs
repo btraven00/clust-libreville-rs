@@ -103,7 +103,7 @@ fn load_graph(spec: &str) -> Csr {
             Csr::from_edges(n, &e)
         }
         "knn2d" => {
-            // ponytail: O(n^2) brute-force kNN, fine for property-test sizes (n <= ~5000).
+            // O(n^2) brute-force kNN, fine for property-test sizes (n <= ~5000).
             let (n, k, seed) = (num(1) as usize, num(2) as usize, num(3) as u64);
             let mut rng = StdRng::seed_from_u64(seed);
             let pts: Vec<(f64, f64)> = (0..n).map(|_| (rng.random(), rng.random())).collect();
