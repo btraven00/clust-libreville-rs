@@ -61,7 +61,7 @@ def test_planted_partition_recovered():
     assert len(set(zip(a.tolist(), block.tolist()))) == 8
 
 
-@pytest.mark.parametrize("fmt", ["csr", "csc", "coo", "array", "f32", "i64", "tuple"])
+@pytest.mark.parametrize("fmt", ["csr", "csc", "coo", "array", "coo_array", "f32", "i64", "tuple"])
 def test_input_formats_agree(fmt):
     g, _ = planted()
     ref = cl.leiden(g, seed=5)
@@ -71,6 +71,8 @@ def test_input_formats_agree(fmt):
         x = g.tocsc()
     elif fmt == "coo":
         x = g.tocoo()
+    elif fmt == "coo_array":  # what scipy.io.mmread returns once scipy defaults to sparse arrays
+        x = sp.coo_array(g)
     elif fmt == "array":
         x = sp.csr_array(g)
     elif fmt == "f32":  # float32 weights (scanpy): same graph only if the weights are exactly f32

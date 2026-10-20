@@ -164,7 +164,7 @@ class Champ:
 def champ(graph, resolutions, seeds=0, *, gamma_range: tuple[float, float] | None = None, n_iterations: int = -1,
           theta: float = 0.01, min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True,
           metric: str = "nvi") -> Champ:
-    """Experimental: the API and the scores may change. Pick resolutions by CHAMP (Weir et al. 2017): run :func:`leiden` at every pair of ``resolutions`` x
+    """Experimental: the API and the scores may change. Pick resolutions by CHAMP (Weir et al. 2017, doi:10.3390/a10030093): run :func:`leiden` at every pair of ``resolutions`` x
     ``seeds`` (numpy arrays, e.g. ``np.logspace(-1, 1, 20)`` and ``np.arange(10)``), then keep the partitions
     that have the highest modularity among the pool somewhere in ``gamma_range`` (default: the span of
     ``resolutions``), each with its interval. Modularity is linear in the resolution, so the intervals are
