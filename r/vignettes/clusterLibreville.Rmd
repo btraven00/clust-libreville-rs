@@ -24,11 +24,16 @@ on a many-core server.
 
 # Installation
 
-```{r install, eval = FALSE}
+<!-- TODO: once on Bioconductor, install with:
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
     install.packages("BiocManager")
 }
 BiocManager::install("clusterLibreville")
+-->
+
+```{r install, eval = FALSE}
+install.packages("clusterLibreville",
+                 repos = c("https://btraven00.r-universe.dev", getOption("repos")))
 ```
 
 Building from source needs a Rust toolchain (`cargo`, `rustc >= 1.85`).
