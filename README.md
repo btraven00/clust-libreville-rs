@@ -1,5 +1,8 @@
 # clust-libreville-rs
 
+[![PyPI](https://img.shields.io/pypi/v/sc-cluster-libreville.svg)](https://pypi.org/project/sc-cluster-libreville/)
+[![Crates.io](https://img.shields.io/crates/v/clust-libreville-rs.svg)](https://crates.io/crates/clust-libreville-rs)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23516379.svg)](https://doi.org/10.5281/zenodo.23516379)
 
 A parallel, seeded, **deterministic** Leiden for community detection on large

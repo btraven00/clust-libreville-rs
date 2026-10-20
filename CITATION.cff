@@ -56,3 +56,22 @@ references:
     year: 2019
     volume: 9
     doi: 10.1038/s41598-019-41695-z
+  - type: article
+    title: "Post-processing partitions to identify domains of modularity optimization"
+    authors:
+      - family-names: Weir
+        given-names: William H.
+      - family-names: Emmons
+        given-names: Scott
+      - family-names: Gibson
+        given-names: Ryan
+      - family-names: Taylor
+        given-names: Dane
+      - family-names: Mucha
+        given-names: Peter J.
+    journal: Algorithms
+    year: 2017
+    volume: 10
+    issue: 3
+    start: 93
+    doi: 10.3390/a10030093
