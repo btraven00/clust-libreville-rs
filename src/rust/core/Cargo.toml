@@ -1,0 +1,29 @@
+[package]
+name = "clust-libreville-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/btraven00/clust-libreville-rs"
+description = "Parallel and deterministic implementation of the Leiden community detection algorithm"
+keywords = ["leiden", "community-detection", "clustering", "graph", "single-cell"]
+categories = ["algorithms", "science"]
+# what a package (crates.io, the Python sdist) ships: the library only
+include = ["/src/**/*.rs", "/Cargo.toml", "/LICENSE", "/README.md"]
+
+[dependencies]
+rayon = "1"
+cubecl = { version = "0.11", optional = true }
+
+[features]
+# GPU backends (cubecl); none by default. One runtime per build.
+gpu-cuda = ["dep:cubecl", "cubecl/cuda"]
+gpu-wgpu = ["dep:cubecl", "cubecl/wgpu"]
+gpu-metal = ["dep:cubecl", "cubecl/metal-native", "gpu-f32"]
+# kernels in f32 (devices without f64); implied by gpu-metal, also usable with gpu-cuda for testing
+gpu-f32 = []
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[patch.crates-io]
+cubecl-llvm = { path = "vendor/cubecl-llvm" }

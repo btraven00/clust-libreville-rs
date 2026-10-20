@@ -1,0 +1,47 @@
+Package: clusterLibreville
+Title: Parallel and Deterministic Leiden Community Detection
+Version: 0.99.0
+Authors@R: person("Ben", "Carrillo", email = "ben.uzh@proton.me", role = c("aut", "cre"),
+    comment = c(ORCID = "0009-0003-5704-4151"))
+Description: A parallel and deterministic implementation of the Leiden
+    community detection algorithm (Traag, Waltman and van Eck 2019,
+    <doi:10.1038/s41598-019-41695-z>) for large sparse graphs such as
+    single-cell kNN and SNN graphs, implemented in Rust. The
+    same seed gives the same labels at any number of threads. The parallel
+    design follows GVE-Leiden (Sahu et al. 2024, <doi:10.1145/3673038.3673146>). Works on
+    sparse matrices, Seurat graphs and igraph graphs, and as a bluster
+    clustering function.
+License: MIT + file LICENSE
+URL: https://github.com/btraven00/clust-libreville-rs
+BugReports: https://github.com/btraven00/clust-libreville-rs/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.0.0
+Config/rextendr/version: 0.5.0
+SystemRequirements: Cargo (Rust's package manager), rustc >= 1.85.0, xz
+biocViews: Clustering, SingleCell, GraphAndNetwork, Network, Software
+Depends:
+    R (>= 4.6.0)
+Imports:
+    bluster,
+    igraph,
+    Matrix,
+    methods,
+    SingleCellExperiment,
+    stats
+Suggests:
+    aricode,
+    BiocStyle,
+    ggplot2,
+    knitr,
+    patchwork,
+    rmarkdown,
+    scater,
+    scran,
+    scRNAseq,
+    scuttle,
+    Seurat,
+    sparseMatrixStats,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+Config/testthat/edition: 3

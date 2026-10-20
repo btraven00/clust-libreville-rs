@@ -1,0 +1,116 @@
+---
+title: "Deterministic Leiden clustering with clusterLibreville"
+author: "Ben Carrillo"
+date: "`r Sys.Date()`"
+output: BiocStyle::html_document
+vignette: >
+    %\VignetteIndexEntry{Deterministic Leiden clustering with clusterLibreville}
+    %\VignetteEngine{knitr::rmarkdown}
+    %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+# Introduction
+
+Leiden clustering of a cell-cell neighbour graph is a standard step of
+single-cell analysis. Most implementations are either sequential or, when
+parallel, nondeterministic: the labels change with the number of threads.
+`clusterLibreville` is a parallel Leiden whose result depends only on the graph,
+the options and the seed. The same seed gives the same labels on a laptop and
+on a many-core server.
+
+# Installation
+
+<!-- TODO: once on Bioconductor, install with:
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+BiocManager::install("clusterLibreville")
+-->
+
+```{r install, eval = FALSE}
+install.packages("clusterLibreville",
+                 repos = c("https://btraven00.r-universe.dev", getOption("repos")))
+```
+
+Building from source needs a Rust toolchain (`cargo`, `rustc >= 1.85`).
+
+# Clustering a neighbour graph
+
+The package ships a small real graph: scanpy kNN connectivities of 3000
+PBMCs (Hao et al. 2021), as a symmetric sparse matrix.
+
+```{r graph}
+library(clusterLibreville)
+f <- system.file("extdata", "hao3k.mtx", package = "clusterLibreville")
+g <- Matrix::readMM(f)
+dim(g)
+```
+
+`leiden()` returns one integer label per vertex; community 1 is the largest.
+
+```{r leiden}
+labels <- leiden(g, resolution = 1, seed = 0)
+table(labels)
+modularity(g, labels)
+```
+
+The number of threads never changes the result:
+
+```{r threads}
+identical(leiden(g, seed = 0, threads = 1), leiden(g, seed = 0, threads = 4))
+```
+
+Higher resolutions give more, smaller communities:
+
+```{r resolution}
+vapply(c(0.5, 1, 2), function(r) max(leiden(g, resolution = r)), integer(1))
+```
+
+# Bioconductor workflows
+
+On a `SingleCellExperiment`, `leiden()` clusters the shared nearest neighbour
+graph of a reduced dimension (built by `bluster::makeSNNGraph()`) and returns a
+factor, ready for `colLabels()`:
+
+```{r sce}
+library(SingleCellExperiment)
+set.seed(1)
+pcs <- rbind(matrix(rnorm(1000, 0), ncol = 10),
+                matrix(rnorm(1000, 3), ncol = 10))
+sce <- SingleCellExperiment(assays = list(counts = matrix(0, 5, 200)),
+                            reducedDims = list(PCA = pcs))
+colLabels(sce) <- leiden(sce, use.dimred = "PCA", k = 10, seed = 1)
+table(colLabels(sce))
+```
+
+`cluster_libreville()` has igraph's community-function interface, so it plugs
+into bluster's graph-based clustering:
+
+```{r bluster}
+param <- bluster::SNNGraphParam(k = 10, cluster.fun = cluster_libreville,
+                                cluster.args = list(resolution = 1, seed = 1))
+table(bluster::clusterRows(pcs, param))
+```
+
+# Options
+
+* `resolution`: the modularity resolution (gamma).
+* `seed`: a non-negative whole number; the only source of randomness.
+* `n_iterations`: Leiden iterations; `-1` (the default) iterates until an
+    iteration changes nothing.
+* `theta`: randomness of the refinement step.
+* `min_gain`: with `n_iterations = -1`, also stop once an iteration gains less
+    modularity than this.
+* `threads`: worker threads (default: all cores); does not change the result.
+* `details = TRUE`: also return how the run ended (iterations, whether it
+  converged, why it stopped, modularity).
+
+# Session information
+
+```{r session}
+sessionInfo()
+```
