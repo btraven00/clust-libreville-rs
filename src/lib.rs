@@ -87,6 +87,30 @@ pub(crate) fn trace() -> bool {
     *TRACE.get_or_init(|| std::env::var_os("CLUST_LIBREVILLE_TRACE").is_some())
 }
 
+/// For the trace's timings. wasm32-unknown-unknown has no clock (`std::time::Instant::now`
+/// panics there), so they read 0 on that target.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) use std::time::Instant;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[derive(Clone, Copy)]
+pub(crate) struct Instant;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl Instant {
+    pub(crate) fn now() -> Instant {
+        Instant
+    }
+    pub(crate) fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl std::ops::Sub for Instant {
+    type Output = std::time::Duration;
+    fn sub(self, _: Instant) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
 /// Community labels 0.., ordered by community size (largest first), then by smallest member.
 pub fn leiden(g: &Graph, o: &Options) -> Vec<u32> {
     run(g, o, None).0
@@ -172,6 +196,11 @@ pub fn with_threads<T: Send>(threads: Option<usize>, f: impl FnOnce() -> T + Sen
 }
 
 fn with_pool<T: Send>(o: &Options, f: impl FnOnce() -> T + Send) -> T {
+    if cfg!(target_family = "wasm") {
+        // no threads to spawn (ThreadPoolBuilder::build fails); rayon's global pool falls back to
+        // the current thread, and the labels do not depend on the thread count anyway
+        return f();
+    }
     let threads = o.threads.unwrap_or_else(|| {
         std::env::var("RAYON_NUM_THREADS").ok().and_then(|s| s.parse().ok()).filter(|&t| t > 0)
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
@@ -229,7 +258,7 @@ fn iterate<B: Backend, W: Weight>(b: &B, g: &Csr<W>, o: &Options, mut hashes: Op
     let mut q = f64::NEG_INFINITY;
     let mut stop = Stop::IterationCap;
     for it in 0..cap {
-        let t = std::time::Instant::now();
+        let t = crate::Instant::now();
         let next = canonical(&iteration(b, &up, &labels, o, it as u64, hashes.as_deref_mut()));
         let unchanged = next == labels;
         let mut done = unchanged;
@@ -278,7 +307,7 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
     if let Some(h) = hashes {
         h.push(b.hash(cur));
     }
-    let t0 = std::time::Instant::now();
+    let t0 = crate::Instant::now();
     let tol = o.tolerance / 10f64.powi(level as i32);
     let col = b.colour(cur, o.seed, step);
     let (colours, rounds) = b.move_nodes(cur, comm, o.resolution, tol, &col, o.apply);
@@ -288,12 +317,12 @@ fn level<B: Backend, W: Weight>(b: &B, cur: &B::Graph<'_, W>, comm: &mut Vec<u32
         eprintln!("it {it} level {level} n {} m {} hash {:016x} colours {colours} rounds {rounds} communities {n_comm} move_s {move_s:.4}",
                   b.n(cur), b.edges(cur), b.hash(cur));
     }
-    let t1 = std::time::Instant::now(); // after the trace's hash, so refine_s doesn't include it
+    let t1 = crate::Instant::now(); // after the trace's hash, so refine_s doesn't include it
     if n_comm == b.n(cur) {
         return None; // every community is one node: nothing to aggregate
     }
     let (mut agg, mut n_agg) = b.refine(cur, &dcomm, o.resolution, o.theta, o.seed, step, o.apply, &col);
-    let t2 = std::time::Instant::now();
+    let t2 = crate::Instant::now();
     if n_agg == b.n(cur) {
         (agg, n_agg) = (dcomm.clone(), n_comm); // refinement merged nothing: aggregate the moved partition (igraph)
     }
