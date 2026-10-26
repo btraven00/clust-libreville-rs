@@ -1,0 +1,9 @@
+name	seed	resolution	n_iterations	theta	min_gain
+default	0	1.0	-1	0.01	0.0
+seed42	42	1.0	-1	0.01	0.0
+res0.5	1	0.5	-1	0.01	0.0
+res2	1	2.0	-1	0.01	0.0
+niter1	7	1.0	1	0.01	0.0
+niter2	7	1.0	2	0.01	0.0
+theta0	5	1.0	-1	0.0	0.0
+mingain	9	1.0	-1	0.01	0.0001

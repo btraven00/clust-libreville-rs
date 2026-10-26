@@ -1,0 +1,265 @@
+---
+title: "Clustering real data: an OSCA workflow with clusterLibreville"
+author: "Ben Carrillo"
+date: "`r Sys.Date()`"
+output: BiocStyle::html_document
+vignette: >
+  %\VignetteIndexEntry{Clustering real data: an OSCA workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7,
+                      fig.height = 5, message = FALSE, warning = FALSE)
+```
+
+# Overview
+
+This vignette follows the basic workflow of
+[Orchestrating Single-Cell Analysis with Bioconductor](https://bioconductor.org/books/release/OSCA/)
+(OSCA) on a real dataset, and clusters it with `clusterLibreville`: quality
+control, normalisation, feature selection, PCA and UMAP as in OSCA, then
+deterministic Leiden clustering, with a look at what determinism does and does
+not buy.
+
+```{r libraries}
+library(clusterLibreville)
+library(SingleCellExperiment)
+```
+
+Each step below names its package: quality control and normalisation from
+`r BiocStyle::Biocpkg("scuttle")`, pre-clustering for size factors, variance
+modelling and PCA from `r BiocStyle::Biocpkg("scran")`, UMAP and plots from
+`r BiocStyle::Biocpkg("scater")`, graphs from `r BiocStyle::Biocpkg("bluster")`.
+
+# Data: mouse brain cells (Zeisel et al. 2015)
+
+The Zeisel brain data (3005 cells), one of the datasets in
+`r BiocStyle::Biocpkg("scRNAseq")`, comes with the authors' cell type labels,
+so the clusters can be checked against them.
+
+```{r data}
+sce <- scRNAseq::ZeiselBrainData()
+sce
+table(sce$level1class)
+```
+
+# Preprocessing, as in OSCA
+
+Quality control on library size, detected genes, mitochondrial and spike-in
+proportions:
+
+```{r qc}
+is.mito <- grepl("^mt-", rownames(sce))
+stats <- scuttle::perCellQCMetrics(sce, subsets = list(Mt = is.mito))
+qc <- scuttle::quickPerCellQC(
+    stats, percent_subsets = c("altexps_ERCC_percent", "subsets_Mt_percent"))
+sce <- sce[, !qc$discard]
+ncol(sce)
+```
+
+Normalisation by deconvolution, variance modelling and the top 10% of highly
+variable genes, then PCA and UMAP. `scran::quickCluster()` is only a coarse
+pre-clustering, so that `scran::computeSumFactors()` pools similar cells when
+estimating size factors; it is not the clustering this vignette is about:
+
+```{r normalise}
+set.seed(1000)
+clusters <- scran::quickCluster(sce)
+sce <- scran::computeSumFactors(sce, cluster = clusters)
+sce <- scuttle::logNormCounts(sce)
+dec <- scran::modelGeneVar(sce)
+hvg <- scran::getTopHVGs(dec, prop = 0.1)
+set.seed(1001)
+sce <- scran::fixedPCA(sce, rank = 50, subset.row = hvg)
+set.seed(1002)
+sce <- scater::runUMAP(sce, dimred = "PCA")
+```
+
+# Clustering
+
+On a `SingleCellExperiment`, `leiden()` builds the shared nearest neighbour
+graph of a reduced dimension (as `bluster::makeSNNGraph()` does) and returns
+the labels as a factor, community 1 the largest:
+
+```{r cluster}
+colLabels(sce) <- leiden(sce, use.dimred = "PCA", k = 10, seed = 0)
+table(colLabels(sce))
+scater::plotReducedDim(sce, "UMAP", colour_by = "label", text_by = "label")
+```
+
+The clusters against the published cell types:
+
+```{r agreement}
+table(cluster = colLabels(sce), type = sce$level1class)
+bluster::pairwiseRand(colLabels(sce), sce$level1class, mode = "index")
+```
+
+At resolution 1 Leiden finds more clusters than there are published types.
+Interneurons, astrocytes, endothelial-mural cells and microglia each map to one
+cluster, while CA1 pyramidal cells and oligodendrocytes are split into several
+subpopulations (the authors' finer `level2class` labels split them too), and one
+smaller cluster mixes types. The adjusted Rand index counts every split
+against the clustering, so it is low here although most clusters are pure; the
+resolution scan below shows how it changes.
+
+# Determinism, and what it does not fix
+
+The same seed gives the same clusters at any number of threads, so a result
+is reproducible on a laptop and on a many-core server:
+
+```{r determinism}
+identical(leiden(sce, seed = 0, threads = 1),
+          leiden(sce, seed = 0, threads = 4))
+```
+
+Determinism makes each seed reproducible; it does not make the partition
+seed-independent. Modularity has many near-equal optima, so different seeds
+can still disagree on some cells:
+
+```{r seeds}
+runs <- lapply(0:4, function(s) leiden(sce, seed = s))
+agree <- outer(seq_along(runs), seq_along(runs), Vectorize(function(a, b)
+    bluster::pairwiseRand(runs[[a]], runs[[b]], mode = "index")))
+round(agree, 3)
+```
+
+Because every run is reproducible and cheap, many seeds (or resolutions) can be
+run and summarised, e.g. into a consensus or a per-cell stability score.
+
+# Did it converge?
+
+`details = TRUE` returns how the run ended: the iterations it took, whether the
+last one changed nothing (a fixed point), why it stopped, and the modularity.
+By default Leiden runs until an iteration changes nothing; with a fixed
+`n_iterations` it may stop before:
+
+```{r converged}
+str(leiden(sce, seed = 0, details = TRUE)[-1])
+str(leiden(sce, seed = 0, n_iterations = 1, details = TRUE)[-1])
+```
+
+# Resolution
+
+Higher resolutions give more, smaller clusters:
+
+```{r resolution}
+res <- c(0.25, 0.5, 1, 2)
+by_res <- lapply(res, function(r) leiden(sce, resolution = r, seed = 0))
+data.frame(resolution = res,
+           clusters = vapply(by_res, nlevels, integer(1)),
+           ARI = vapply(by_res, function(l) bluster::pairwiseRand(
+               l, sce$level1class, mode = "index"), numeric(1)))
+```
+
+```{r resolution-umap, fig.width = 9, fig.height = 4}
+plots <- lapply(c(1, 4), function(i) {
+    sce$res <- by_res[[i]]
+    r <- res[i]
+    scater::plotReducedDim(sce, "UMAP", colour_by = "res") +
+        ggplot2::ggtitle(paste("resolution", r))
+})
+patchwork::wrap_plots(plots)
+```
+
+# Using clusterLibreville in bluster
+
+`cluster_libreville()` has igraph's community-function interface, so it plugs
+into bluster's graph-based clustering, for example through
+`bluster::clusterRows()`; it gives the same labels as `leiden(sce)` above:
+
+```{r bluster}
+param <- bluster::SNNGraphParam(k = 10, cluster.fun = cluster_libreville,
+                                cluster.args = list(seed = 0))
+by_bluster <- bluster::clusterRows(reducedDim(sce, "PCA"), param)
+identical(as.integer(by_bluster), as.integer(colLabels(sce)))
+```
+
+# Compared with the usual Bioconductor choices
+
+`scran::clusterCells()` (OSCA's entry point, now `bluster::clusterRows()`)
+clusters the same SNN graph with walktrap by default. bluster's
+`cluster.fun = "leiden"` passes no arguments to `igraph::cluster_leiden()`, so
+igraph's defaults apply: the *CPM* objective at resolution 1 (not modularity)
+and 2 iterations. Each choice on the same graph:
+
+```{r compare}
+# the SNN graph that leiden(sce) builds, clustered by each method
+g <- bluster::makeSNNGraph(reducedDim(sce, "PCA"), k = 10, type = "rank")
+choices <- list(
+    "walktrap (OSCA default)" = function(g) igraph::cluster_walktrap(g),
+    "igraph leiden, defaults (CPM)" = function(g) igraph::cluster_leiden(g),
+    "igraph leiden, modularity, 2 iterations" = function(g)
+        igraph::cluster_leiden(g, objective_function = "modularity"),
+    "clusterLibreville, 2 iterations" = function(g)
+        cluster_libreville(g, seed = 0, n_iterations = 2),
+    "igraph leiden, modularity, converged" = function(g)
+        igraph::cluster_leiden(g, objective_function = "modularity",
+                               n_iterations = -1),
+    "clusterLibreville, converged" = function(g)
+        cluster_libreville(g, seed = 0))
+run <- lapply(choices, function(f) {
+    # clustering only, on the SNN graph built above; best of 3
+    secs <- vapply(1:3, function(i) {
+        set.seed(0)
+        system.time(comm <<- f(g))[["elapsed"]]
+    }, numeric(1))
+    list(labels = factor(igraph::membership(comm)), seconds = min(secs))
+})
+labels <- lapply(run, `[[`, "labels")
+ari <- function(a, b) bluster::pairwiseRand(a, b, mode = "index")
+ref <- labels[["clusterLibreville, converged"]]
+data.frame(clusters = vapply(labels, nlevels, integer(1)),
+           ARI_types = vapply(labels, ari, numeric(1), b = sce$level1class),
+           ARI_libreville = vapply(labels, ari, numeric(1), b = ref),
+           modularity = vapply(labels, function(l) modularity(g, l),
+                               numeric(1)),
+           seconds = vapply(run, `[[`, numeric(1), "seconds"))
+```
+
+With the modularity objective, igraph's Leiden and `clusterLibreville` find
+essentially the same partition, at 2 iterations (igraph's default) and run to
+convergence (`n_iterations = -1`; igraph's R package converges, but
+python-igraph up to 0.11.9 runs a single iteration for -1).
+
+Leiden through bluster with its default arguments optimises CPM instead and
+splits the data into many small clusters: pass
+`objective_function = "modularity"` (or a CPM resolution suited to the graph's
+weights) when using it. Walktrap is a different algorithm, with its own
+trade-offs.
+
+## Does performance matter?
+
+Not on a dataset this size. The `seconds` column above is the clustering step
+alone, on the machine that built this vignette; igraph runs on one thread and
+`clusterLibreville` on all cores. At 2 iterations the two take about the same
+time, and run to convergence igraph is the faster on `r ncol(sce)` cells:
+`clusterLibreville` pays fixed costs (a thread pool, graph conversion and
+validation) that a small graph doesn't amortise.
+
+The balance flips with size. On the 68,579 PBMCs of
+`r BiocStyle::Biocpkg("TENxPBMCData")` (`"pbmc68k"`, the same preprocessing
+and the same kind of SNN graph), the clustering step took:
+
+| method | threads | seconds |
+|---|---|---|
+| igraph Leiden, 2 iterations | 1 | 49 |
+| igraph Leiden, converged | 1 | 73 |
+| `clusterLibreville`, converged | 1 | 42 |
+| `clusterLibreville`, converged | 8 | 16 |
+
+All runs converge to the same partition (10 clusters, adjusted Rand index
+1.000), and `clusterLibreville`'s labels are identical at 1, 2, 4 and 8
+threads. These times come from an 8-core laptop with other jobs running, so
+the multi-threaded ones are pessimistic; they were measured outside this
+vignette, which would otherwise take minutes to build. The crossover lies
+somewhere between the two dataset sizes. So `clusterLibreville` pays off in
+speed once datasets reach tens of thousands of cells; its other advantage,
+reproducibility at any number of threads, holds at every size.
+
+# Session information
+
+```{r session}
+sessionInfo()
+```
