@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "clust-libreville-rs: parallel, deterministic Leiden community detection"
 type: software
-version: 0.1.0
-date-released: 2026-10-21
+version: 0.1.1
+date-released: 2026-10-26
 doi: 10.5281/zenodo.23516379
 identifiers:
   - type: doi
