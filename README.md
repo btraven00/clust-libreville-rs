@@ -38,6 +38,12 @@ There are bindings for R (package `clusterLibreville`)
 and Python (`python/`, `pip install sc-cluster-libreville`, import
 `cluster_libreville`). Details and testing (CPU, GPU): [docs/design.md](docs/design.md).
 
+```r
+# binaries for Windows and macOS; elsewhere builds from source (needs cargo)
+install.packages("clusterLibreville", repos = "https://btraven00.r-universe.dev")
+# Ubuntu 26.04 binary: repos = "https://btraven00.r-universe.dev/bin/linux/resolute-x86_64/4.6/"
+```
+
 ## Lineage
 
 GVE-Leiden (Sahu, [arXiv:2312.13936](https://arxiv.org/abs/2312.13936), MIT) is

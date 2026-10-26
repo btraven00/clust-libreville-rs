@@ -73,7 +73,7 @@ pub(crate) struct Move {
 
 /// Colour groups of `g` from a seeded vertex order.
 pub(crate) fn colouring<W: Weight>(g: &Csr<W>, seed: u64, step: u64) -> Vec<Vec<u32>> {
-    let t = std::time::Instant::now();
+    let t = crate::Instant::now();
     let groups = colour(g, &rng::order(g.n(), seed, rng::COLOUR_ORDER, step));
     if crate::trace() {
         eprintln!("    colouring n {}: {:.4} s", g.n(), t.elapsed().as_secs_f64());
