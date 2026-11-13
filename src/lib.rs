@@ -54,7 +54,9 @@ pub struct Options {
     /// nothing moves.
     pub tolerance: f64,
     /// With `n_iterations < 0`: also stop when an iteration gains less than this modularity.
-    /// 0 (default): strictly until an iteration changes nothing (comparable to igraph/leidenalg).
+    /// Default 1e-4: the last iterations of a strict run cost most of its time for 1e-3 of
+    /// modularity or less (docs/design.md, Stopping). 0: strictly until an iteration changes nothing
+    /// (comparable to igraph/leidenalg).
     pub min_gain: f64,
     /// See [`Apply`].
     pub apply: Apply,
@@ -73,7 +75,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, min_gain: 0.0, apply: Apply::Sequential, threads: None }
+        Options { resolution: 1.0, seed: 0, n_iterations: -1, theta: 0.01, tolerance: 0.0, min_gain: 1e-4, apply: Apply::Sequential, threads: None }
     }
 }
 

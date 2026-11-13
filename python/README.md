@@ -55,8 +55,8 @@ c.labels[c.best]  # the widest resolution range; c.to_seeds near 0 = stable acro
 cl.tl.champ(adata)  # scanpy-style: adata.obs["champ"], adata.uns["champ"]["domains"]
 ```
 
-Options: `resolution`, `seed`, `n_iterations` (-1: until an iteration changes nothing),
-`theta` (refinement randomness), `min_gain` (optional early stop), `threads` (default: all
+Options: `resolution`, `seed`, `n_iterations` (-1: until an iteration changes nothing or gains less than `min_gain`),
+`theta` (refinement randomness), `min_gain` (default 1e-4; 0: strict convergence), `threads` (default: all
 cores; never changes the result).
 
 License: MIT.

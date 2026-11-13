@@ -37,7 +37,7 @@ def _csr(graph):
 
 
 def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int = -1, theta: float = 0.01,
-           min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True,
+           min_gain: float = 1e-4, threads: int | None = None, check_symmetry: bool = True,
            return_info: bool = False):
     """Leiden communities of an undirected weighted graph, maximising modularity.
 
@@ -51,11 +51,12 @@ def leiden(graph, *, resolution: float = 1.0, seed: int = 0, n_iterations: int =
     seed
         Seed (0 <= seed < 2**64).
     n_iterations
-        Leiden iterations; -1: until an iteration changes nothing.
+        Leiden iterations; -1: until an iteration changes nothing, or gains less than ``min_gain``.
     theta
         Randomness of the refinement.
     min_gain
         With ``n_iterations=-1``, also stop once an iteration gains less modularity than this.
+        0: strictly until an iteration changes nothing (much slower on large graphs, for 1e-3 of modularity or less).
     threads
         Worker threads; None: all cores (or ``RAYON_NUM_THREADS``). Does not change the result.
     check_symmetry
@@ -162,7 +163,7 @@ class Champ:
 
 
 def champ(graph, resolutions, seeds=0, *, gamma_range: tuple[float, float] | None = None, n_iterations: int = -1,
-          theta: float = 0.01, min_gain: float = 0.0, threads: int | None = None, check_symmetry: bool = True,
+          theta: float = 0.01, min_gain: float = 1e-4, threads: int | None = None, check_symmetry: bool = True,
           metric: str = "nvi") -> Champ:
     """Experimental: the API and the scores may change. Pick resolutions by CHAMP (Weir et al. 2017, doi:10.3390/a10030093): run :func:`leiden` at every pair of ``resolutions`` x
     ``seeds`` (numpy arrays, e.g. ``np.logspace(-1, 1, 20)`` and ``np.arange(10)``), then keep the partitions

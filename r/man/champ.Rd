@@ -11,7 +11,7 @@ champ(
   gamma_range = NULL,
   n_iterations = -1L,
   theta = 0.01,
-  min_gain = 0,
+  min_gain = 1e-04,
   threads = NULL,
   check_symmetry = TRUE,
   metric = c("nvi", "ami")

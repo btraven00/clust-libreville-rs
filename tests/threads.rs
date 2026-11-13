@@ -65,7 +65,7 @@ fn hao2021_matches_lock_at_every_thread_count() {
     ];
     for (name, seed, apply, want) in lock {
         let Some(g) = bench_graph(name) else { eprintln!("skip {name}: no graph"); continue };
-        let (labels, _) = same_at_every_thread_count(&g, &Options { seed, apply, ..Default::default() });
+        let (labels, _) = same_at_every_thread_count(&g, &Options { seed, apply, min_gain: 0.0, ..Default::default() }); // locked at strict convergence
         assert_eq!(fnv(&labels), want, "{name} seed {seed} {apply:?}: not the locked labels");
     }
 }

@@ -132,7 +132,8 @@ run and summarised, e.g. into a consensus or a per-cell stability score.
 
 `details = TRUE` returns how the run ended: the iterations it took, whether the
 last one changed nothing (a fixed point), why it stopped, and the modularity.
-By default Leiden runs until an iteration changes nothing; with a fixed
+By default Leiden runs until an iteration changes nothing or gains less than
+`min_gain` (`min_gain = 0`: strictly until nothing changes); with a fixed
 `n_iterations` it may stop before:
 
 ```{r converged}

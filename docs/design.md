@@ -77,10 +77,16 @@ is where a determinism bug lives.
   cores. The cache records the process id and is rebuilt in a forked child (R `mclapply`, Python
   `multiprocessing` with fork), whose copied pools have no worker threads.
 - **Stopping** (`leiden_run` → `LeidenRun { labels, iterations, stop, modularity }`):
-  - `n_iterations < 0` (default): iterate until an iteration changes nothing, really (igraph before C core
+  - `n_iterations < 0` (default): iterate until an iteration changes nothing (with `min_gain = 0`), really (igraph before C core
     0.10.17 ran one iteration for `n_iterations = -1`). Capped at 1000 iterations (`Stop::IterationCap`).
-  - `min_gain`: also stop when an iteration gains less modularity than this. The fast mode; non-inferior
-    to strict convergence (below).
+  - `min_gain` (default 1e-4): also stop when an iteration gains less modularity than this. On the
+    1M-cell graph at 8 threads: 3.8 s, Q 0.96263 (1e-5: 9.5 s, Q 0.96277), against 94 s, Q 0.96287 for
+    `min_gain = 0`. What 1e-4 gives up against strict convergence, at 16 threads: 0.0002 of modularity on
+    the hao2021 100k and 154k graphs (mean of 5 seeds; the seed SD is 0.0003-0.0009), 0.0008 on a
+    1.77M-cell CELLxGENE kNN graph (17.6 s against 191 s) and 0.0029 on an 803k-cell one (9.2 s against
+    78 s; its strict runs span 0.8831-0.8878 over 4 seeds), one seed each. 1e-5 is the value validated
+    over 20 seeds as non-inferior to strict convergence (below); it gives up 0.0004 and 0.0005 on the two
+    CELLxGENE graphs, in 47 s and 33 s.
   - `Stop::{Converged, MinGain, IterationCap}` says which.
 
 ## Tests

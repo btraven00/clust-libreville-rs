@@ -14,7 +14,7 @@ leiden(x, ...)
   seed = 0,
   n_iterations = -1L,
   theta = 0.01,
-  min_gain = 0,
+  min_gain = 1e-04,
   threads = NULL,
   check_symmetry = TRUE,
   details = FALSE
@@ -42,12 +42,14 @@ neighbour graph of \code{reducedDim(x, use.dimred)}, built by
 \item{seed}{Seed, a non-negative whole number below 2^53.}
 
 \item{n_iterations}{Leiden iterations; -1: until an iteration changes
-nothing.}
+nothing, or gains less than \code{min_gain}.}
 
 \item{theta}{Randomness of the refinement.}
 
 \item{min_gain}{With \code{n_iterations = -1}, also stop once an iteration gains
-less modularity than this (0: strict).}
+less modularity than this. 0: strictly until an iteration changes
+nothing, which can take many times longer on large graphs for a
+modularity gain of 1e-3 or less.}
 
 \item{threads}{Worker threads; \code{NULL}: all cores. Does not change the
 result.}
