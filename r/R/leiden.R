@@ -40,10 +40,12 @@
 #' @param resolution Resolution of the modularity (gamma).
 #' @param seed Seed, a non-negative whole number below 2^53.
 #' @param n_iterations Leiden iterations; -1: until an iteration changes
-#'   nothing.
+#'   nothing, or gains less than `min_gain`.
 #' @param theta Randomness of the refinement.
 #' @param min_gain With `n_iterations = -1`, also stop once an iteration gains
-#'   less modularity than this (0: strict).
+#'   less modularity than this. 0: strictly until an iteration changes
+#'   nothing, which can take many times longer on large graphs for a
+#'   modularity gain of 1e-3 or less.
 #' @param threads Worker threads; `NULL`: all cores. Does not change the
 #'   result.
 #' @param check_symmetry Verify that the matrix is symmetric. `FALSE` skips
@@ -83,7 +85,7 @@ setGeneric("leiden", function(x, ...) standardGeneric("leiden"))
 #' @export
 setMethod("leiden", "ANY", function(x, resolution = 1, seed = 0,
                                     n_iterations = -1L, theta = 0.01,
-                                    min_gain = 0, threads = NULL,
+                                    min_gain = 1e-4, threads = NULL,
                                     check_symmetry = TRUE, details = FALSE) {
     m <- .as_graph(x)
     stopifnot(seed >= 0, seed < 2^53, seed == floor(seed),
@@ -210,7 +212,7 @@ cluster_libreville <- function(graph, ...) {
 #' @export
 champ <- function(graph, resolutions = 10^seq(-1, 1, length.out = 20),
                   seeds = 0:4, gamma_range = NULL, n_iterations = -1L,
-                  theta = 0.01, min_gain = 0, threads = NULL,
+                  theta = 0.01, min_gain = 1e-4, threads = NULL,
                   check_symmetry = TRUE, metric = c("nvi", "ami")) {
     metric <- match.arg(metric)
     m <- .as_graph(graph)

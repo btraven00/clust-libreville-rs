@@ -101,10 +101,10 @@ table(bluster::clusterRows(pcs, param))
 * `resolution`: the modularity resolution (gamma).
 * `seed`: a non-negative whole number; the only source of randomness.
 * `n_iterations`: Leiden iterations; `-1` (the default) iterates until an
-    iteration changes nothing.
+    iteration changes nothing, or gains less than `min_gain`.
 * `theta`: randomness of the refinement step.
 * `min_gain`: with `n_iterations = -1`, also stop once an iteration gains less
-    modularity than this.
+    modularity than this (default `1e-4`; `0`: strictly until nothing changes).
 * `threads`: worker threads (default: all cores); does not change the result.
 * `details = TRUE`: also return how the run ended (iterations, whether it
   converged, why it stopped, modularity).
